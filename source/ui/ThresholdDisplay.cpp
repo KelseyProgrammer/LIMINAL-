@@ -62,7 +62,7 @@ void ThresholdDisplay::paint (juce::Graphics& g)
 void ThresholdDisplay::drawStar (juce::Graphics& g,
                                   juce::Point<float> centre,
                                   float innerR, float outerR,
-                                  float blendLevel)
+                                  float starBlend)
 {
     // Six-pointed star: 6 outer points alternating with 6 inner points
     // Points at 0°, 60°, 120°, 180°, 240°, 300°
@@ -95,7 +95,7 @@ void ThresholdDisplay::drawStar (juce::Graphics& g,
     }
     starPath.closeSubPath();
 
-    const float alpha = 0.4f + blendLevel * 0.6f;
+    const float alpha = 0.4f + starBlend * 0.6f;
 
     // Glow layer (thick, transparent)
     g.setColour (LiminalLookAndFeel::GOLD.withAlpha (alpha * 0.3f));

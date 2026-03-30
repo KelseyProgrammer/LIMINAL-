@@ -30,7 +30,6 @@ void PitchGhost::process (juce::AudioBuffer<float>& buffer, float blendFactor)
                                       captureBuffer.getNumChannels());
 
     const float dt = 1.f / static_cast<float> (sampleRate);
-    const float pitchRatio = pitchToRatio (currentPitchCents);
 
     for (int s = 0; s < numSamples; ++s)
     {

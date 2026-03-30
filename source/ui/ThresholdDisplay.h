@@ -27,7 +27,7 @@ public:
 private:
     void timerCallback() override;
     void drawStar (juce::Graphics& g, juce::Point<float> centre,
-                   float innerR, float outerR, float blendLevel);
+                   float innerR, float outerR, float starBlend);
 
     std::atomic<float> blendLevel    { 0.f };
     std::atomic<float> envelopeLevel { 1.f };

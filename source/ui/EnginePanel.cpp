@@ -62,7 +62,7 @@ void EnginePanel::paint (juce::Graphics& g)
     // Engine label
     const juce::String labels[] = { "HAUNT VERB", "SHIMMER", "PITCH GHOST" };
     g.setColour (LiminalLookAndFeel::GOLD);
-    g.setFont (juce::Font (9.f).withStyle (juce::Font::bold));
+    g.setFont (juce::Font (juce::FontOptions().withHeight (9.f).withStyle ("Bold")));
     g.drawText (labels[static_cast<int> (engineType)],
                 bounds.reduced (4.f).removeFromTop (14.f),
                 juce::Justification::centred);

@@ -64,6 +64,27 @@ juce::AudioProcessorValueTreeState::ParameterLayout PluginProcessor::createParam
         "rampTime", "Ramp Time",
         juce::NormalisableRange<float> (100.f, 10000.f, 1.f, 0.3f), 2000.f));
 
+    // ── Modulation ────────────────────────────────────────────────────────────
+    layout.add (std::make_unique<juce::AudioParameterFloat> (
+        "lfoRate", "LFO Rate",
+        juce::NormalisableRange<float> (0.01f, 10.f, 0.01f, 0.4f), 0.5f));
+
+    layout.add (std::make_unique<juce::AudioParameterFloat> (
+        "lfoToDepth", "LFO → Depth",
+        juce::NormalisableRange<float> (-1.f, 1.f, 0.01f), 0.f));
+
+    layout.add (std::make_unique<juce::AudioParameterFloat> (
+        "lfoToHaunt", "LFO → Haunt",
+        juce::NormalisableRange<float> (-1.f, 1.f, 0.01f), 0.f));
+
+    layout.add (std::make_unique<juce::AudioParameterFloat> (
+        "lfoToCrystallize", "LFO → Crystallize",
+        juce::NormalisableRange<float> (-1.f, 1.f, 0.01f), 0.f));
+
+    layout.add (std::make_unique<juce::AudioParameterFloat> (
+        "envToDepth", "Env → Depth",
+        juce::NormalisableRange<float> (-1.f, 1.f, 0.01f), 0.f));
+
     return layout;
 }
 
@@ -112,8 +133,6 @@ void PluginProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     modMatrix.prepare        (spec);
     rampSystem.setRampTime   (2000.f, sampleRate);
 
-    dryBuffer.setSize (getTotalNumInputChannels(), samplesPerBlock);
-
     // Initialise smoothed values (50ms ramp)
     const double sr = sampleRate;
     sThreshold  .reset (sr, 0.05); sThreshold  .setCurrentAndTargetValue (0.3f);
@@ -158,10 +177,20 @@ void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     lastEnvelopeLevel.store (envelopeLevel);
 
     // ── 3. Update modulation ─────────────────────────────────────────────────
-    modMatrix.process (0.f, envelopeLevel);
+    modMatrix.process (envelopeLevel);
 
     // ── 4. Ramp system ───────────────────────────────────────────────────────
-    rampSystem.process (buffer.getNumSamples());
+    const bool latchOn = apvts.getRawParameterValue ("latch")->load() > 0.5f;
+    if (latchOn)
+    {
+        if (rampTriggerPending.exchange (false))
+            rampSystem.trigger();
+
+        const float rampTimeMs = apvts.getRawParameterValue ("rampTime")->load();
+        rampSystem.setRampTime (rampTimeMs, getSampleRate());
+        rampSystem.process (buffer.getNumSamples());
+        rampPosition.store (rampSystem.getPosition());
+    }
 
     // ── 5. Main engine process ───────────────────────────────────────────────
     liminalEngine.process (buffer, envelopeLevel);
@@ -170,8 +199,36 @@ void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer,
 }
 
 //==============================================================================
+void PluginProcessor::captureSnapshotA()
+{
+    snapshotA.threshold   = apvts.getRawParameterValue ("threshold")  ->load();
+    snapshotA.slew        = apvts.getRawParameterValue ("slew")       ->load();
+    snapshotA.depth       = apvts.getRawParameterValue ("depth")      ->load();
+    snapshotA.haunt       = apvts.getRawParameterValue ("haunt")      ->load();
+    snapshotA.crystallize = apvts.getRawParameterValue ("crystallize")->load();
+    snapshotA.possession  = apvts.getRawParameterValue ("possession") ->load();
+    snapshotA.mix         = apvts.getRawParameterValue ("mix")        ->load();
+    snapshotA.interval    = static_cast<int> (apvts.getRawParameterValue ("interval")->load());
+    hasSnapshotA = true;
+}
+
+void PluginProcessor::captureSnapshotB()
+{
+    snapshotB.threshold   = apvts.getRawParameterValue ("threshold")  ->load();
+    snapshotB.slew        = apvts.getRawParameterValue ("slew")       ->load();
+    snapshotB.depth       = apvts.getRawParameterValue ("depth")      ->load();
+    snapshotB.haunt       = apvts.getRawParameterValue ("haunt")      ->load();
+    snapshotB.crystallize = apvts.getRawParameterValue ("crystallize")->load();
+    snapshotB.possession  = apvts.getRawParameterValue ("possession") ->load();
+    snapshotB.mix         = apvts.getRawParameterValue ("mix")        ->load();
+    snapshotB.interval    = static_cast<int> (apvts.getRawParameterValue ("interval")->load());
+    hasSnapshotB = true;
+}
+
+//==============================================================================
 void PluginProcessor::syncParametersFromAPVTS()
 {
+    // Always keep smoothed values tracking APVTS (used when no snapshots)
     sThreshold  .setTargetValue (apvts.getRawParameterValue ("threshold")  ->load());
     sSlew       .setTargetValue (apvts.getRawParameterValue ("slew")       ->load());
     sDepth      .setTargetValue (apvts.getRawParameterValue ("depth")      ->load());
@@ -180,18 +237,70 @@ void PluginProcessor::syncParametersFromAPVTS()
     sCrystallize.setTargetValue (apvts.getRawParameterValue ("crystallize")->load());
     sPossession .setTargetValue (apvts.getRawParameterValue ("possession") ->load());
 
-    liminalEngine.setThreshold   (sThreshold  .getNextValue());
-    liminalEngine.setSlew        (sSlew       .getNextValue());
-    liminalEngine.setDepth       (sDepth      .getNextValue());
-    liminalEngine.setMix         (sMix        .getNextValue());
-    liminalEngine.setHaunt       (sHaunt      .getNextValue());
-    liminalEngine.setCrystallize (sCrystallize.getNextValue());
-    liminalEngine.setPossession  (sPossession .getNextValue());
+    float threshold, slew, depth, haunt, crystallize, possession, mix;
+    int   interval;
 
-    const int interval = static_cast<int> (
-        apvts.getRawParameterValue ("interval")->load());
-    static const int semitones[] = { 12, 7, 19, 1, 6 };
-    liminalEngine.setInterval (semitones[juce::jlimit (0, 4, interval)]);
+    if (hasSnapshotA && hasSnapshotB)
+    {
+        const float t = rampPosition.load();
+        auto lerp = [] (float a, float b, float p) { return a + (b - a) * p; };
+
+        threshold   = lerp (snapshotA.threshold,   snapshotB.threshold,   t);
+        slew        = lerp (snapshotA.slew,        snapshotB.slew,        t);
+        depth       = lerp (snapshotA.depth,       snapshotB.depth,       t);
+        haunt       = lerp (snapshotA.haunt,       snapshotB.haunt,       t);
+        crystallize = lerp (snapshotA.crystallize, snapshotB.crystallize, t);
+        possession  = lerp (snapshotA.possession,  snapshotB.possession,  t);
+        mix         = lerp (snapshotA.mix,         snapshotB.mix,         t);
+        interval    = (t < 0.5f) ? snapshotA.interval : snapshotB.interval;
+
+        // Advance smoothed values so they don't jump when ramp is deactivated
+        sThreshold  .setCurrentAndTargetValue (threshold);
+        sSlew       .setCurrentAndTargetValue (slew);
+        sDepth      .setCurrentAndTargetValue (depth);
+        sMix        .setCurrentAndTargetValue (mix);
+        sHaunt      .setCurrentAndTargetValue (haunt);
+        sCrystallize.setCurrentAndTargetValue (crystallize);
+        sPossession .setCurrentAndTargetValue (possession);
+    }
+    else
+    {
+        threshold   = sThreshold  .getNextValue();
+        slew        = sSlew       .getNextValue();
+        depth       = sDepth      .getNextValue();
+        haunt       = sHaunt      .getNextValue();
+        crystallize = sCrystallize.getNextValue();
+        possession  = sPossession .getNextValue();
+        mix         = sMix        .getNextValue();
+        const int idx = static_cast<int> (apvts.getRawParameterValue ("interval")->load());
+        static const int semitones[] = { 12, 7, 19, 1, 6 };
+        interval = semitones[juce::jlimit (0, 4, idx)];
+    }
+
+    // ── ModMatrix routing + apply (one block latency — fine for LFO rates) ──────
+    modMatrix.setLFORate (apvts.getRawParameterValue ("lfoRate")->load());
+    modMatrix.setRouting (ModMatrix::LFO,      ModMatrix::DEPTH,       apvts.getRawParameterValue ("lfoToDepth")      ->load());
+    modMatrix.setRouting (ModMatrix::LFO,      ModMatrix::HAUNT,       apvts.getRawParameterValue ("lfoToHaunt")      ->load());
+    modMatrix.setRouting (ModMatrix::LFO,      ModMatrix::CRYSTALLIZE, apvts.getRawParameterValue ("lfoToCrystallize")->load());
+    modMatrix.setRouting (ModMatrix::ENVELOPE, ModMatrix::DEPTH,       apvts.getRawParameterValue ("envToDepth")      ->load());
+
+    depth       = juce::jlimit (0.f, 1.f, depth       + modMatrix.getModValue (ModMatrix::DEPTH));
+    haunt       = juce::jlimit (0.f, 1.f, haunt       + modMatrix.getModValue (ModMatrix::HAUNT));
+    crystallize = juce::jlimit (0.f, 1.f, crystallize + modMatrix.getModValue (ModMatrix::CRYSTALLIZE));
+
+    liminalEngine.setThreshold   (threshold);
+    liminalEngine.setSlew        (slew);
+    liminalEngine.setDepth       (depth);
+    liminalEngine.setMix         (mix);
+    liminalEngine.setHaunt       (haunt);
+    liminalEngine.setCrystallize (crystallize);
+    liminalEngine.setPossession  (possession);
+    liminalEngine.setInterval    (interval);
+
+    const float toneVal    = apvts.getRawParameterValue ("tone")      ->load();
+    const bool  invertMode = apvts.getRawParameterValue ("invertMode")->load() > 0.5f;
+    liminalEngine.setTone       (toneVal);
+    liminalEngine.setInvertMode (invertMode);
 }
 
 //==============================================================================

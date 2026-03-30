@@ -206,6 +206,133 @@ TEST_CASE ("RampSystem: position clamps at 0 and 1", "[ramp]")
     REQUIRE_THAT (ramp.getPosition(), Catch::Matchers::WithinAbs (0.f, 1e-6f));
 }
 
+// ── InvertMode ───────────────────────────────────────────────────────────────
+
+TEST_CASE ("LiminalEngine: invertMode=false, above threshold → blend = 0", "[invert]")
+{
+    LiminalEngine engine;
+    engine.prepare (makeSpec());
+    engine.setThreshold (0.3f);
+    engine.setSlew (1.f);
+    engine.setDepth (1.f);
+    engine.setInvertMode (false);
+
+    juce::AudioBuffer<float> buf (2, 512);
+    fillBuffer (buf, 0.f);
+
+    engine.process (buf, 0.9f);  // above threshold
+    REQUIRE_THAT (engine.getCurrentBlend(), Catch::Matchers::WithinAbs (0.f, 0.01f));
+}
+
+TEST_CASE ("LiminalEngine: invertMode=true, above threshold → blend > 0", "[invert]")
+{
+    LiminalEngine engine;
+    engine.prepare (makeSpec());
+    engine.setThreshold (0.3f);
+    engine.setSlew (1.f);
+    engine.setDepth (1.f);
+    engine.setInvertMode (true);
+
+    juce::AudioBuffer<float> buf (2, 512);
+    fillBuffer (buf, 0.f);
+
+    for (int i = 0; i < 100; ++i)
+        engine.process (buf, 0.9f);  // well above threshold
+
+    REQUIRE (engine.getCurrentBlend() > 0.5f);
+}
+
+TEST_CASE ("LiminalEngine: invertMode=true, below threshold → blend = 0", "[invert]")
+{
+    LiminalEngine engine;
+    engine.prepare (makeSpec());
+    engine.setThreshold (0.3f);
+    engine.setSlew (1.f);
+    engine.setDepth (1.f);
+    engine.setInvertMode (true);
+
+    juce::AudioBuffer<float> buf (2, 512);
+    fillBuffer (buf, 0.f);
+
+    engine.process (buf, 0.0f);  // below threshold
+    REQUIRE_THAT (engine.getCurrentBlend(), Catch::Matchers::WithinAbs (0.f, 0.01f));
+}
+
+// ── Tone ─────────────────────────────────────────────────────────────────────
+
+TEST_CASE ("LiminalEngine: tone=0 → output unchanged from dry (silence in)", "[tone]")
+{
+    LiminalEngine engine;
+    engine.prepare (makeSpec());
+    engine.setTone (0.f);
+
+    juce::AudioBuffer<float> buf (2, 512);
+    fillBuffer (buf, 0.5f);
+
+    // Record output with no tone shaping as reference
+    engine.process (buf, 0.f);  // blend=0, passthrough
+    const float refSample = buf.getSample (0, 256);
+
+    // With tone=0 the applyTone early-exit should leave it unchanged
+    LiminalEngine engine2;
+    engine2.prepare (makeSpec());
+    engine2.setTone (0.f);
+
+    juce::AudioBuffer<float> buf2 (2, 512);
+    fillBuffer (buf2, 0.5f);
+    engine2.process (buf2, 0.f);
+
+    REQUIRE_THAT (buf2.getSample (0, 256), Catch::Matchers::WithinAbs (refSample, 1e-5f));
+}
+
+TEST_CASE ("LiminalEngine: tone=-1 darkens output (reduces high-freq energy)", "[tone]")
+{
+    // Feed a high-frequency sine through two engines: one with tone=0, one with tone=-1.
+    // The dark one should have lower energy.
+    const int    N  = 512;
+    const double sr = 44100.0;
+    const float  fc = 10000.f; // 10kHz test tone
+
+    auto makeSine = [&] (juce::AudioBuffer<float>& buf)
+    {
+        for (int s = 0; s < N; ++s)
+        {
+            const float v = std::sin (juce::MathConstants<float>::twoPi * fc
+                                      * static_cast<float> (s) / static_cast<float> (sr));
+            buf.setSample (0, s, v);
+            buf.setSample (1, s, v);
+        }
+    };
+
+    auto rmsOf = [] (const juce::AudioBuffer<float>& buf) -> float
+    {
+        float sum = 0.f;
+        const float* d = buf.getReadPointer (0);
+        for (int s = 0; s < buf.getNumSamples(); ++s) sum += d[s] * d[s];
+        return std::sqrt (sum / static_cast<float> (buf.getNumSamples()));
+    };
+
+    // Run a few warm-up blocks so the tone filter state settles
+    LiminalEngine flat, dark;
+    flat.prepare (makeSpec (sr, N));   flat.setTone ( 0.f);
+    dark.prepare (makeSpec (sr, N));   dark.setTone (-1.f);
+
+    for (int w = 0; w < 4; ++w)
+    {
+        juce::AudioBuffer<float> b1 (2, N), b2 (2, N);
+        makeSine (b1);  makeSine (b2);
+        flat.process (b1, 0.f);
+        dark.process (b2, 0.f);
+    }
+
+    juce::AudioBuffer<float> bufFlat (2, N), bufDark (2, N);
+    makeSine (bufFlat);  makeSine (bufDark);
+    flat.process (bufFlat, 0.f);
+    dark.process (bufDark, 0.f);
+
+    REQUIRE (rmsOf (bufDark) < rmsOf (bufFlat));
+}
+
 // ── Real-time safety ─────────────────────────────────────────────────────────
 
 TEST_CASE ("processBlock: no denormals under sustained silence", "[rt-safety]")

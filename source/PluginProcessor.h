@@ -51,27 +51,45 @@ public:
     float getEnvelopeLevel() const { return lastEnvelopeLevel.load(); }
     float getBlendLevel()    const { return lastBlendLevel.load(); }
 
+    // Ramp A/B snapshot capture (call from message thread)
+    void captureSnapshotA();
+    void captureSnapshotB();
+
+    // Kick the ramp system to animate in the current direction (audio-thread safe)
+    void triggerRamp() { rampTriggerPending.store (true); }
+
+    // Ramp position: 0.0 = snapshot A, 1.0 = snapshot B
+    // Written by editor slider; also written by processBlock when latch animates
+    std::atomic<float> rampPosition { 0.f };
+
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
     void syncParametersFromAPVTS();
-    void applyMix (juce::AudioBuffer<float>& wetBuffer,
-                   const juce::AudioBuffer<float>& dryBuffer);
 
     EnvelopeFollower envelopeFollower;
     LiminalEngine    liminalEngine;
     RampSystem       rampSystem;
     ModMatrix        modMatrix;
 
-    juce::AudioBuffer<float> dryBuffer;
-
     // Smoothed parameter values (audio-thread safe)
     juce::SmoothedValue<float> sThreshold, sSlew, sDepth, sMix;
     juce::SmoothedValue<float> sHaunt, sCrystallize, sPossession;
 
+    // Parameter snapshots for Ramp A/B morph
+    struct Snapshot {
+        float threshold = 0.3f, slew = 200.f, depth = 1.f;
+        float haunt = 0.5f, crystallize = 0.f, possession = 0.5f;
+        float mix = 1.f;
+        int   interval = 0;
+    };
+    Snapshot snapshotA, snapshotB;
+    bool hasSnapshotA = false, hasSnapshotB = false;
+
     // Atomic mirror for UI thread reads
-    std::atomic<float> lastEnvelopeLevel { 0.f };
-    std::atomic<float> lastBlendLevel    { 0.f };
+    std::atomic<float> lastEnvelopeLevel  { 0.f };
+    std::atomic<float> lastBlendLevel     { 0.f };
+    std::atomic<bool>  rampTriggerPending { false };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PluginProcessor)
 };

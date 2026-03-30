@@ -12,7 +12,14 @@ PluginEditor::PluginEditor (PluginProcessor& p)
       hauntPanel    (EnginePanel::Engine::HauntVerb,  p.apvts),
       shimmerPanel  (EnginePanel::Engine::Shimmer,    p.apvts),
       ghostPanel    (EnginePanel::Engine::PitchGhost, p.apvts),
-      knobRampTime  ("rampTime",  "TIME",      p.apvts)
+      knobLfoRate            ("lfoRate",          "LFO RATE",    p.apvts),
+      knobLfoToDepth         ("lfoToDepth",       "LFO>DEPTH",   p.apvts),
+      knobLfoToHaunt         ("lfoToHaunt",       "LFO>HAUNT",   p.apvts),
+      knobLfoToCrystallize   ("lfoToCrystallize", "LFO>CRYST",   p.apvts),
+      knobEnvToDepth         ("envToDepth",       "ENV>DEPTH",   p.apvts),
+      knobRampTime           ("rampTime",         "TIME",        p.apvts),
+      invertAttachment (p.apvts, "invertMode",  invertButton),
+      latchAttachment  (p.apvts, "latch",       latchButton)
 {
     setLookAndFeel (&lookAndFeel);
 
@@ -23,20 +30,36 @@ PluginEditor::PluginEditor (PluginProcessor& p)
     addAndMakeVisible (knobDepth);
     addAndMakeVisible (knobTone);
     addAndMakeVisible (knobMix);
+    addAndMakeVisible (invertButton);
 
     addAndMakeVisible (hauntPanel);
     addAndMakeVisible (shimmerPanel);
     addAndMakeVisible (ghostPanel);
 
+    addAndMakeVisible (knobLfoRate);
+    addAndMakeVisible (knobLfoToDepth);
+    addAndMakeVisible (knobLfoToHaunt);
+    addAndMakeVisible (knobLfoToCrystallize);
+    addAndMakeVisible (knobEnvToDepth);
+
+    rampAButton.onClick = [this] { processorRef.captureSnapshotA(); };
+    rampBButton.onClick = [this] { processorRef.captureSnapshotB(); };
+    addAndMakeVisible (rampAButton);
+    addAndMakeVisible (rampBButton);
+
     rampSlider.setSliderStyle (juce::Slider::LinearHorizontal);
     rampSlider.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
     rampSlider.setRange (0.0, 1.0);
+    rampSlider.onValueChange = [this] {
+        processorRef.rampPosition.store (static_cast<float> (rampSlider.getValue()));
+    };
     addAndMakeVisible (rampSlider);
 
+    latchButton.onClick = [this] { processorRef.triggerRamp(); };
     addAndMakeVisible (latchButton);
     addAndMakeVisible (knobRampTime);
 
-    setSize (800, 500);
+    setSize (800, 568);
     startTimerHz (30);
 }
 
@@ -65,6 +88,10 @@ void PluginEditor::timerCallback()
     thresholdDisplay.setHauntActive      (active);
     thresholdDisplay.setShimmerActive    (active);
     thresholdDisplay.setPitchGhostActive (active);
+
+    // Mirror ramp position to slider (handles both manual and latch-animated cases)
+    rampSlider.setValue (static_cast<double> (processorRef.rampPosition.load()),
+                         juce::dontSendNotification);
 }
 
 void PluginEditor::paint (juce::Graphics& g)
@@ -73,12 +100,12 @@ void PluginEditor::paint (juce::Graphics& g)
 
     // Title: LIMINAL
     g.setColour (LiminalLookAndFeel::GHOST_WHITE);
-    g.setFont (juce::Font (18.f).withExtraKerningFactor (0.3f));
+    g.setFont (juce::Font (juce::FontOptions().withHeight (18.f)).withExtraKerningFactor (0.3f));
     g.drawText ("LIMINAL", 16, 10, 200, 24, juce::Justification::left);
 
     // Manufacturer: AMENT AUDIO
     g.setColour (LiminalLookAndFeel::GOLD_DIM);
-    g.setFont (juce::Font (9.f));
+    g.setFont (juce::Font (juce::FontOptions().withHeight (9.f)));
     g.drawText ("AMENT AUDIO", getWidth() - 100, 14, 88, 14, juce::Justification::right);
 }
 
@@ -95,9 +122,10 @@ void PluginEditor::resized()
 
     area.removeFromTop (8);
 
-    // Top row of 5 knobs
+    // Top row: 5 knobs + INV toggle
     const int knobRowH = 72;
     auto knobRow = area.removeFromTop (knobRowH);
+    invertButton .setBounds (knobRow.removeFromRight (36).reduced (4, 20));
     const int knobW = knobRow.getWidth() / 5;
     knobThreshold.setBounds (knobRow.removeFromLeft (knobW));
     knobSlew     .setBounds (knobRow.removeFromLeft (knobW));
@@ -117,9 +145,23 @@ void PluginEditor::resized()
 
     area.removeFromTop (8);
 
+    // Modulation row: LFO Rate | LFO→Depth | LFO→Haunt | LFO→Cryst | Env→Depth
+    const int modRowH = 60;
+    auto modRow = area.removeFromTop (modRowH);
+    const int modKnobW = modRow.getWidth() / 5;
+    knobLfoRate          .setBounds (modRow.removeFromLeft (modKnobW));
+    knobLfoToDepth       .setBounds (modRow.removeFromLeft (modKnobW));
+    knobLfoToHaunt       .setBounds (modRow.removeFromLeft (modKnobW));
+    knobLfoToCrystallize .setBounds (modRow.removeFromLeft (modKnobW));
+    knobEnvToDepth       .setBounds (modRow);
+
+    area.removeFromTop (8);
+
     // Ramp strip at bottom
     auto rampRow = area;
     knobRampTime.setBounds (rampRow.removeFromRight (60));
     latchButton .setBounds (rampRow.removeFromRight (52).reduced (0, 16));
+    rampBButton .setBounds (rampRow.removeFromRight (28).reduced (2, 10));
+    rampAButton .setBounds (rampRow.removeFromLeft  (28).reduced (2, 10));
     rampSlider  .setBounds (rampRow.reduced (0, 14));
 }

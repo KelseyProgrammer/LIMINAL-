@@ -45,8 +45,6 @@ private:
 
     // Frozen output for crystallize=1 hold
     juce::AudioBuffer<float> frozenBuffer;
-    bool  isFrozen = false;
-    float frozenBlend = 0.f;
 
     double sampleRate = 44100.0;
 };

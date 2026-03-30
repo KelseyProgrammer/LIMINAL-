@@ -13,10 +13,12 @@ public:
     void prepare (const juce::dsp::ProcessSpec& spec);
     void process (juce::AudioBuffer<float>& buffer, float envelopeLevel);
 
-    void setThreshold (float normalizedThreshold);  // 0.0–1.0
-    void setSlew      (float slewMs);
-    void setDepth     (float depth);                // 0.0–1.0
-    void setMix       (float mix);                  // 0.0–1.0
+    void setThreshold  (float normalizedThreshold);  // 0.0–1.0
+    void setSlew       (float slewMs);
+    void setDepth      (float depth);               // 0.0–1.0
+    void setMix        (float mix);                 // 0.0–1.0
+    void setTone       (float t);                   // -1.0 (dark) to +1.0 (bright)
+    void setInvertMode (bool invert);               // flip threshold polarity
 
     // Engine parameter passthrough
     void setHaunt       (float amount);
@@ -37,10 +39,16 @@ private:
     float targetBlend  = 0.f;
     float slewRate     = 0.f;
 
+    void  applyTone (juce::AudioBuffer<float>& buffer);
+
     float threshold    = 0.3f;
     float depth        = 1.0f;
     float mix          = 1.0f;
+    float tone         = 0.f;
     float lastEnvelopeLevel = 1.0f;
+    bool  invertMode   = false;
+
+    float toneState[2] = {};   // one-pole IIR state per channel
 
     double sampleRate  = 44100.0;
     int    blockSize   = 512;

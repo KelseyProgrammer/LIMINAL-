@@ -29,7 +29,6 @@ private:
     bool   active = false;
 
     std::unique_ptr<KnobComponent> primaryKnob;
-    std::unique_ptr<KnobComponent> secondaryKnob;
 
     // Only for Shimmer: interval ComboBox
     std::unique_ptr<juce::ComboBox> intervalBox;

@@ -8,29 +8,24 @@ void ModMatrix::prepare (const juce::dsp::ProcessSpec& spec)
 
     lfo.prepare (spec);
     lfo.initialise ([] (float x) { return std::sin (x); });
-    lfo.setFrequency (0.5f);  // 0.5 Hz default LFO rate
+    lfo.setFrequency (0.5f);
 
-    std::fill (std::begin (modValues), std::end (modValues), 0.f);
+    clearRoutings();
 }
 
 void ModMatrix::setRouting (Source src, Dest dest, float amount)
 {
-    // Replace existing route for the same src+dest pair
-    for (auto& r : routes)
-    {
-        if (r.src == src && r.dest == dest)
-        {
-            r.amount = amount;
-            return;
-        }
-    }
-    routes.push_back ({ src, dest, amount });
+    amounts[src][dest] = amount;
 }
 
 void ModMatrix::clearRoutings()
 {
-    routes.clear();
-    std::fill (std::begin (modValues), std::end (modValues), 0.f);
+    for (int s = 0; s < kNumSources; ++s)
+        for (int d = 0; d < kNumDests; ++d)
+            amounts[s][d] = 0.f;
+
+    for (int d = 0; d < kNumDests; ++d)
+        modValues[d] = 0.f;
 }
 
 float ModMatrix::getModValue (Dest dest) const
@@ -43,17 +38,20 @@ float ModMatrix::getLFOValue() const
     return lfoValue;
 }
 
-void ModMatrix::process (float /*lfoExternalValue*/, float envelopeValue)
+void ModMatrix::process (float envelopeValue)
 {
-    // Tick LFO by one sample (called once per block — approximate, but fine for slow modulation)
+    // Tick LFO once per block (slow modulation — block-rate is fine)
     lfoValue = lfo.processSample (0.f);
 
-    std::fill (std::begin (modValues), std::end (modValues), 0.f);
+    // Compute summed mod values for each destination
+    const float sources[kNumSources] = { lfoValue, envelopeValue };
 
-    for (const auto& r : routes)
+    for (int d = 0; d < kNumDests; ++d)
     {
-        const float src = (r.src == LFO) ? lfoValue : envelopeValue;
-        modValues[r.dest] += src * r.amount;
+        float sum = 0.f;
+        for (int s = 0; s < kNumSources; ++s)
+            sum += sources[s] * amounts[s][d];
+        modValues[d] = sum;
     }
 }
 

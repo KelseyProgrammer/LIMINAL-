@@ -82,7 +82,7 @@ void LiminalLookAndFeel::drawToggleButton (juce::Graphics& g,
     }
 
     g.setColour (on ? COBALT : TEXT_DIM);
-    g.setFont (juce::Font (10.f));
+    g.setFont (juce::Font (juce::FontOptions().withHeight (10.f)));
     g.drawFittedText (button.getButtonText(), button.getLocalBounds(),
                       juce::Justification::centred, 1);
 }
