@@ -125,7 +125,7 @@ jobs:
       - name: Import Certificates (macOS)
         uses: sudara/basic-macos-keychain-action@v1
         id: keychain
-        if: ${{ runner.os == 'macOS'}}
+        if: ${{ runner.os == 'macOS' && secrets.DEV_ID_APP_CERT != '' }}
         with:
           dev-id-app-cert: ${{ secrets.DEV_ID_APP_CERT }}
           dev-id-app-password: ${{ secrets.DEV_ID_APP_PASSWORD }}
@@ -133,7 +133,7 @@ jobs:
           dev-id-installer-password: ${{ secrets.DEV_ID_INSTALLER_PASSWORD }}
 
       - name: Codesign (macOS)
-        if: ${{ runner.os == 'macOS' }}
+        if: ${{ runner.os == 'macOS' && secrets.DEV_ID_APP_CERT != '' }}
         timeout-minutes: 5
         run: |
           # Each plugin must be code signed
@@ -162,7 +162,7 @@ jobs:
           SetFile -a C "${{ env.CLAP_PATH }}"
 
       - name: pkgbuild, Productbuild and Notarize
-        if: ${{ runner.os == 'macOS' }}
+        if: ${{ runner.os == 'macOS' && secrets.DEV_ID_APP_CERT != '' }}
         timeout-minutes: 5
         run: |
           pkgbuild --identifier "${{ env.BUNDLE_ID }}.au.pkg" --version $VERSION --component "${{ env.AU_PATH }}" --install-location "/Library/Audio/Plug-Ins/Components"  "packaging/${{ env.PRODUCT_NAME }}.au.pkg"
@@ -232,12 +232,24 @@ jobs:
           name: ${{ env.ARTIFACT_NAME }}.zip
           path: "${{ env.ARTIFACTS_PATH }}/${{ env.ARTIFACT_NAME }}.zip"
 
+      - name: Zip artifacts (macOS, no signing)
+        if: ${{ runner.os == 'macOS' && secrets.DEV_ID_APP_CERT == '' }}
+        working-directory: ${{ env.ARTIFACTS_PATH }}
+        run: 7z a -tzip "${{ env.ARTIFACT_NAME }}.zip" "-xr!lib${{ env.PRODUCT_NAME }}_SharedCode.a" .
+
       - name: Upload pkg (macOS)
-        if: ${{ runner.os == 'macOS' }}
+        if: ${{ runner.os == 'macOS' && secrets.DEV_ID_APP_CERT != '' }}
         uses: actions/upload-artifact@v7
         with:
           name: ${{ env.ARTIFACT_NAME }}.pkg
           path: packaging/${{ env.ARTIFACT_NAME }}.pkg
+
+      - name: Upload Zip (macOS, no signing)
+        if: ${{ runner.os == 'macOS' && secrets.DEV_ID_APP_CERT == '' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.ARTIFACT_NAME }}.zip
+          path: "${{ env.ARTIFACTS_PATH }}/${{ env.ARTIFACT_NAME }}.zip"
 
   release:
     if: contains(github.ref, 'tags/v')
