@@ -6,6 +6,10 @@ void PitchGhost::prepare (const juce::dsp::ProcessSpec& spec)
 {
     sampleRate = spec.sampleRate;
 
+    ringBuffer.setSize (static_cast<int> (spec.numChannels), kRingSize);
+    ringBuffer.clear();
+    ringWritePos = 0;
+
     captureBuffer.setSize (static_cast<int> (spec.numChannels), kMaxCaptureSamples);
     captureBuffer.clear();
 
@@ -70,14 +74,42 @@ void PitchGhost::process (juce::AudioBuffer<float>& buffer, float blendFactor)
     }
 }
 
-void PitchGhost::triggerCapture (const juce::AudioBuffer<float>& inputBuffer)
+void PitchGhost::pushAudio (const juce::AudioBuffer<float>& buffer)
 {
-    captureLength = std::min (kMaxCaptureSamples, inputBuffer.getNumSamples());
-    const int numCh = std::min (inputBuffer.getNumChannels(),
-                                captureBuffer.getNumChannels());
+    const int numSamples  = buffer.getNumSamples();
+    const int numChannels = std::min (buffer.getNumChannels(),
+                                      ringBuffer.getNumChannels());
+
+    for (int s = 0; s < numSamples; ++s)
+    {
+        const int pos = ringWritePos & (kRingSize - 1);   // fast power-of-2 modulo
+        for (int ch = 0; ch < numChannels; ++ch)
+            ringBuffer.getWritePointer (ch)[pos] = buffer.getReadPointer (ch)[s];
+        ringWritePos = (ringWritePos + 1) & (kRingSize - 1);
+    }
+}
+
+void PitchGhost::triggerCapture()
+{
+    // Capture the last 250ms worth of audio from the ring buffer
+    captureLength = std::min (kMaxCaptureSamples,
+                              static_cast<int> (sampleRate * 0.25));
+    captureLength = std::max (captureLength, 1);   // safety
+
+    const int numCh  = std::min (ringBuffer.getNumChannels(),
+                                 captureBuffer.getNumChannels());
+
+    // Copy backwards from ring write head (the most recent audio)
+    const int startPos = (ringWritePos - captureLength + kRingSize) & (kRingSize - 1);
 
     for (int ch = 0; ch < numCh; ++ch)
-        captureBuffer.copyFrom (ch, 0, inputBuffer, ch, 0, captureLength);
+    {
+        const auto* src = ringBuffer.getReadPointer (ch);
+        auto*       dst = captureBuffer.getWritePointer (ch);
+
+        for (int i = 0; i < captureLength; ++i)
+            dst[i] = src[(startPos + i) & (kRingSize - 1)];
+    }
 
     captureReadPos    = 0.f;
     decayEnvelope     = 1.f;

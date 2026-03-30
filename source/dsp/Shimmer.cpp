@@ -101,13 +101,13 @@ void Shimmer::process (juce::AudioBuffer<float>& buffer, float blendFactor)
             // Voice 1: user interval
             const float v1Out = voice1[ch].processSample (shifterIn, ch);
 
-            // Voice 2: one octave above voice 1
-            const float v2Out = voice2[ch].processSample (v1Out, ch);
+            // Voice 2: one octave above voice 1 — feed same input as voice 1, not v1Out
+            const float v2Out = voice2[ch].processSample (shifterIn, ch);
 
             const float shimmerOut = (v1Out + v2Out) * 0.5f;
 
-            // Update feedback
-            fb[s] = shimmerOut;
+            // Update feedback — clamp to prevent static buildup
+            fb[s] = juce::jlimit (-1.f, 1.f, shimmerOut);
 
             // Crystallize: lerp between decaying and frozen output
             if (shouldFreeze)
@@ -116,8 +116,8 @@ void Shimmer::process (juce::AudioBuffer<float>& buffer, float blendFactor)
             const float wetOut = shimmerOut * (1.f - crystallizeAmount)
                                + frz[s]     * crystallizeAmount;
 
-            // Blend onto output
-            wet[s] = dryIn + wetOut * blendFactor;
+            // Wet/dry crossfade — prevents volume inflation
+            wet[s] = dryIn * (1.f - blendFactor) + wetOut * blendFactor;
         }
     }
 }

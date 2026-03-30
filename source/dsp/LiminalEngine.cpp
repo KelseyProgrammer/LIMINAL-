@@ -22,12 +22,15 @@ void LiminalEngine::prepare (const juce::dsp::ProcessSpec& spec)
 
 void LiminalEngine::process (juce::AudioBuffer<float>& buffer, float envelopeLevel)
 {
+    // Keep ring buffer current so PitchGhost always has recent audio to capture
+    pitchGhost.pushAudio (buffer);
+
     // Detect threshold crossing to trigger PitchGhost capture
     // Normal: falling below threshold. Invert: rising above threshold.
     const bool crossedNormal  = !invertMode && lastEnvelopeLevel >= threshold && envelopeLevel < threshold;
     const bool crossedInvert  =  invertMode && lastEnvelopeLevel <= threshold && envelopeLevel > threshold;
     if (crossedNormal || crossedInvert)
-        pitchGhost.triggerCapture (buffer);
+        pitchGhost.triggerCapture();
 
     lastEnvelopeLevel = envelopeLevel;
 
@@ -138,9 +141,9 @@ void LiminalEngine::setPossession (float amount)
     pitchGhost.setPossession (amount);
 }
 
-void LiminalEngine::onThresholdCrossedDown (const juce::AudioBuffer<float>& inputBuffer)
+void LiminalEngine::onThresholdCrossedDown (const juce::AudioBuffer<float>& /*inputBuffer*/)
 {
-    pitchGhost.triggerCapture (inputBuffer);
+    pitchGhost.triggerCapture();
 }
 
 void LiminalEngine::setTone (float t)

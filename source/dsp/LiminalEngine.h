@@ -41,7 +41,7 @@ private:
 
     void  applyTone (juce::AudioBuffer<float>& buffer);
 
-    float threshold    = 0.3f;
+    float threshold    = 0.05f;
     float depth        = 1.0f;
     float mix          = 1.0f;
     float tone         = 0.f;

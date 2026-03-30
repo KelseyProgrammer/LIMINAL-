@@ -40,7 +40,7 @@ private:
     juce::AudioBuffer<float> feedbackBuffer;
 
     float crystallizeAmount = 0.f;
-    float feedbackLevel     = 0.5f;
+    float feedbackLevel     = 0.3f;  // reduced from 0.5 — less aggressive buildup
     int   intervalSemitones = 12;
 
     // Frozen output for crystallize=1 hold

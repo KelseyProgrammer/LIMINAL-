@@ -14,17 +14,25 @@ public:
     void setDriftDirection(int direction);      // -1=down, 0=wander, 1=up
     void setGhostDecay    (float decayMs);
 
-    // Call when envelope crosses threshold downward
-    void triggerCapture (const juce::AudioBuffer<float>& inputBuffer);
+    // Feed audio continuously so ring buffer stays current
+    void pushAudio (const juce::AudioBuffer<float>& buffer);
+
+    // Call when envelope crosses threshold downward — reads from ring buffer
+    void triggerCapture();
 
 private:
     void  updateDrift  (float deltaTime);
     float pitchToRatio (float cents) const;
 
-    // Capture buffer (holds the snapshot just before silence)
-    static constexpr int kMaxCaptureSamples = 256;
+    // Ring buffer: continuously accumulates ~1.5s of pre-threshold audio
+    static constexpr int kRingSize          = 65536;  // power-of-2 for fast modulo
+    juce::AudioBuffer<float> ringBuffer;
+    int  ringWritePos = 0;
+
+    // Capture buffer (snapshot copied from ring on trigger)
+    static constexpr int kMaxCaptureSamples = 24000;  // up to ~500ms at 48kHz
     juce::AudioBuffer<float> captureBuffer;
-    int   captureLength  = 256;
+    int   captureLength  = 2048;
     float captureReadPos = 0.f;
 
     bool  ghostActive    = false;

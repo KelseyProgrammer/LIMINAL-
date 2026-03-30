@@ -9,11 +9,11 @@ juce::AudioProcessorValueTreeState::ParameterLayout PluginProcessor::createParam
     // ── Core ──────────────────────────────────────────────────────────────────
     layout.add (std::make_unique<juce::AudioParameterFloat> (
         "threshold", "Threshold",
-        juce::NormalisableRange<float> (0.f, 1.f, 0.01f), 0.3f));
+        juce::NormalisableRange<float> (0.f, 1.f, 0.01f), 0.05f));
 
     layout.add (std::make_unique<juce::AudioParameterFloat> (
         "slew", "Slew",
-        juce::NormalisableRange<float> (5.f, 2000.f, 1.f, 0.3f), 200.f));
+        juce::NormalisableRange<float> (5.f, 2000.f, 1.f, 0.3f), 600.f));
 
     layout.add (std::make_unique<juce::AudioParameterFloat> (
         "depth", "Depth",
