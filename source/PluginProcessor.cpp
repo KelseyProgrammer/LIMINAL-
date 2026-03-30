@@ -179,6 +179,15 @@ void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     // ── 3. Update modulation ─────────────────────────────────────────────────
     modMatrix.process (envelopeLevel);
 
+    // LFO phase accumulation for UI visualization (0.0–1.0)
+    {
+        const float rate = apvts.getRawParameterValue ("lfoRate")->load();
+        float phase = lfoPhase.load();
+        phase += rate * static_cast<float> (buffer.getNumSamples()) / static_cast<float> (getSampleRate());
+        if (phase >= 1.f) phase -= std::floor (phase);
+        lfoPhase.store (phase);
+    }
+
     // ── 4. Ramp system ───────────────────────────────────────────────────────
     const bool latchOn = apvts.getRawParameterValue ("latch")->load() > 0.5f;
     if (latchOn)

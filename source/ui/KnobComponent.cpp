@@ -5,6 +5,7 @@ KnobComponent::KnobComponent (const juce::String& paramID,
                                juce::AudioProcessorValueTreeState& apvts)
     : labelText (label)
 {
+    slider.setName (paramID);  // used by LiminalLookAndFeel to detect mod knobs
     slider.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
     slider.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
     addAndMakeVisible (slider);

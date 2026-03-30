@@ -26,7 +26,8 @@ private:
     void drawGhostGlyph    (juce::Graphics& g, juce::Rectangle<float> area) const;
 
     Engine engineType;
-    bool   active = false;
+    bool   active       = false;
+    float  glowIntensity = 0.f;  // 0–1, smoothly tracks active state
 
     std::unique_ptr<KnobComponent> primaryKnob;
 

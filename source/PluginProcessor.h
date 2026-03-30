@@ -61,6 +61,7 @@ public:
     // Ramp position: 0.0 = snapshot A, 1.0 = snapshot B
     // Written by editor slider; also written by processBlock when latch animates
     std::atomic<float> rampPosition { 0.f };
+    std::atomic<float> lfoPhase     { 0.f };  // 0.0–1.0, for UI LFO dot visualization
 
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();

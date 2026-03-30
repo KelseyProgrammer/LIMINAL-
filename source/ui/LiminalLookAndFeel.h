@@ -14,6 +14,8 @@ public:
     void drawToggleButton (juce::Graphics& g, juce::ToggleButton& button,
                            bool highlighted, bool down) override;
 
+    void setLFOPhase (float phase) noexcept { lfoPhase = phase; }
+
     // ── Color Palette ──────────────────────────────────────────
     static const juce::Colour COBALT;
     static const juce::Colour COBALT_MID;
@@ -25,4 +27,7 @@ public:
     static const juce::Colour KNOB_TRACK;
     static const juce::Colour TEXT_PRIMARY;
     static const juce::Colour TEXT_DIM;
+
+private:
+    float lfoPhase = 0.f;
 };

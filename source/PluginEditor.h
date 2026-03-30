@@ -21,6 +21,11 @@ public:
 private:
     void timerCallback() override;
 
+    void drawFiligreeBorder         (juce::Graphics& g);
+    void drawCelestialDecorations   (juce::Graphics& g);
+    static void draw4PointStar      (juce::Graphics& g, float cx, float cy, float r);
+    static void drawCrescent        (juce::Graphics& g, float cx, float cy, float r);
+
     PluginProcessor& processorRef;
 
     LiminalLookAndFeel lookAndFeel;
