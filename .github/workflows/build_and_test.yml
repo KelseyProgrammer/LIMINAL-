@@ -32,6 +32,9 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.event.pull_request.base.repo.full_name
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
+    env:
+      MACOS_SIGNING_CERT: ${{ secrets.DEV_ID_APP_CERT }}
+      WINDOWS_SIGNING_ENDPOINT: ${{ secrets.AZURE_ENDPOINT }}
     strategy:
       fail-fast: false # show all errors for each platform (vs. cancel jobs on error)
       matrix:
@@ -125,7 +128,7 @@ jobs:
       - name: Import Certificates (macOS)
         uses: sudara/basic-macos-keychain-action@v1
         id: keychain
-        if: ${{ runner.os == 'macOS' && secrets.DEV_ID_APP_CERT != '' }}
+        if: ${{ runner.os == 'macOS' && env.MACOS_SIGNING_CERT != '' }}
         with:
           dev-id-app-cert: ${{ secrets.DEV_ID_APP_CERT }}
           dev-id-app-password: ${{ secrets.DEV_ID_APP_PASSWORD }}
@@ -133,7 +136,7 @@ jobs:
           dev-id-installer-password: ${{ secrets.DEV_ID_INSTALLER_PASSWORD }}
 
       - name: Codesign (macOS)
-        if: ${{ runner.os == 'macOS' && secrets.DEV_ID_APP_CERT != '' }}
+        if: ${{ runner.os == 'macOS' && env.MACOS_SIGNING_CERT != '' }}
         timeout-minutes: 5
         run: |
           # Each plugin must be code signed
@@ -162,7 +165,7 @@ jobs:
           SetFile -a C "${{ env.CLAP_PATH }}"
 
       - name: pkgbuild, Productbuild and Notarize
-        if: ${{ runner.os == 'macOS' && secrets.DEV_ID_APP_CERT != '' }}
+        if: ${{ runner.os == 'macOS' && env.MACOS_SIGNING_CERT != '' }}
         timeout-minutes: 5
         run: |
           pkgbuild --identifier "${{ env.BUNDLE_ID }}.au.pkg" --version $VERSION --component "${{ env.AU_PATH }}" --install-location "/Library/Audio/Plug-Ins/Components"  "packaging/${{ env.PRODUCT_NAME }}.au.pkg"
@@ -193,7 +196,7 @@ jobs:
           mv "packaging/Output/${{ env.ARTIFACT_NAME }}.exe" "${{ env.ARTIFACTS_PATH }}/"
 
       - name: Codesign with Azure Trusted Signing
-        if: ${{ runner.os == 'Windows' && secrets.AZURE_ENDPOINT != '' }}
+        if: ${{ runner.os == 'Windows' && env.WINDOWS_SIGNING_ENDPOINT != '' }}
         uses: azure/artifact-signing-action@v1
         with:
           # The Azure Active Directory tenant (directory) ID.
@@ -233,19 +236,19 @@ jobs:
           path: "${{ env.ARTIFACTS_PATH }}/${{ env.ARTIFACT_NAME }}.zip"
 
       - name: Zip artifacts (macOS, no signing)
-        if: ${{ runner.os == 'macOS' && secrets.DEV_ID_APP_CERT == '' }}
+        if: ${{ runner.os == 'macOS' && env.MACOS_SIGNING_CERT == '' }}
         working-directory: ${{ env.ARTIFACTS_PATH }}
         run: 7z a -tzip "${{ env.ARTIFACT_NAME }}.zip" "-xr!lib${{ env.PRODUCT_NAME }}_SharedCode.a" .
 
       - name: Upload pkg (macOS)
-        if: ${{ runner.os == 'macOS' && secrets.DEV_ID_APP_CERT != '' }}
+        if: ${{ runner.os == 'macOS' && env.MACOS_SIGNING_CERT != '' }}
         uses: actions/upload-artifact@v7
         with:
           name: ${{ env.ARTIFACT_NAME }}.pkg
           path: packaging/${{ env.ARTIFACT_NAME }}.pkg
 
       - name: Upload Zip (macOS, no signing)
-        if: ${{ runner.os == 'macOS' && secrets.DEV_ID_APP_CERT == '' }}
+        if: ${{ runner.os == 'macOS' && env.MACOS_SIGNING_CERT == '' }}
         uses: actions/upload-artifact@v7
         with:
           name: ${{ env.ARTIFACT_NAME }}.zip
