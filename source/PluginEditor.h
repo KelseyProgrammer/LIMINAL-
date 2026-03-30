@@ -2,24 +2,42 @@
 
 #include "PluginProcessor.h"
 #include "BinaryData.h"
-#include "melatonin_inspector/melatonin_inspector.h"
 
-//==============================================================================
-class PluginEditor : public juce::AudioProcessorEditor
+#include "ui/LiminalLookAndFeel.h"
+#include "ui/ThresholdDisplay.h"
+#include "ui/EnginePanel.h"
+#include "ui/KnobComponent.h"
+
+class PluginEditor : public juce::AudioProcessorEditor,
+                     private juce::Timer
 {
 public:
     explicit PluginEditor (PluginProcessor&);
     ~PluginEditor() override;
 
-    //==============================================================================
-    void paint (juce::Graphics&) override;
-    void resized() override;
+    void paint   (juce::Graphics&) override;
+    void resized () override;
 
 private:
-    // This reference is provided as a quick way for your editor to
-    // access the processor object that created it.
+    void timerCallback() override;
+
     PluginProcessor& processorRef;
-    std::unique_ptr<melatonin::Inspector> inspector;
-    juce::TextButton inspectButton { "Inspect the UI" };
+
+    LiminalLookAndFeel lookAndFeel;
+
+    // Central display
+    ThresholdDisplay thresholdDisplay;
+
+    // Five main knobs (top row)
+    KnobComponent knobThreshold, knobSlew, knobDepth, knobTone, knobMix;
+
+    // Three engine panels
+    EnginePanel hauntPanel, shimmerPanel, ghostPanel;
+
+    // Ramp strip (bottom)
+    juce::Slider     rampSlider;
+    juce::ToggleButton latchButton { "LATCH" };
+    KnobComponent    knobRampTime;
+
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PluginEditor)
 };
