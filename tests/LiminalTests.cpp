@@ -33,7 +33,7 @@ static float runFollower (EnvelopeFollower& ef, float input, int numSamples)
 
 // ── EnvelopeFollower ─────────────────────────────────────────────────────────
 
-TEST_CASE ("EnvelopeFollower: silence → 0.0", "[envelope]")
+TEST_CASE ("EnvelopeFollower: silence -> 0.0", "[envelope]")
 {
     EnvelopeFollower ef;
     ef.prepare (44100.0);
@@ -42,7 +42,7 @@ TEST_CASE ("EnvelopeFollower: silence → 0.0", "[envelope]")
     REQUIRE_THAT (level, Catch::Matchers::WithinAbs (0.f, 1e-6f));
 }
 
-TEST_CASE ("EnvelopeFollower: sustained 1.0 sine → converges near 1.0", "[envelope]")
+TEST_CASE ("EnvelopeFollower: sustained 1.0 sine -> converges near 1.0", "[envelope]")
 {
     EnvelopeFollower ef;
     ef.prepare (44100.0);
@@ -72,7 +72,7 @@ TEST_CASE ("EnvelopeFollower: releases after signal stops", "[envelope]")
 
 // ── LiminalEngine ────────────────────────────────────────────────────────────
 
-TEST_CASE ("LiminalEngine: above threshold → blend = 0", "[engine]")
+TEST_CASE ("LiminalEngine: above threshold -> blend = 0", "[engine]")
 {
     LiminalEngine engine;
     engine.prepare (makeSpec());
@@ -90,7 +90,7 @@ TEST_CASE ("LiminalEngine: above threshold → blend = 0", "[engine]")
     REQUIRE_THAT (engine.getCurrentBlend(), Catch::Matchers::WithinAbs (0.f, 0.01f));
 }
 
-TEST_CASE ("LiminalEngine: below threshold → blend > 0", "[engine]")
+TEST_CASE ("LiminalEngine: below threshold -> blend > 0", "[engine]")
 {
     LiminalEngine engine;
     engine.prepare (makeSpec());
@@ -160,7 +160,7 @@ TEST_CASE ("LiminalEngine: no output above threshold (silence in = silence out)"
 
 // ── RampSystem ───────────────────────────────────────────────────────────────
 
-TEST_CASE ("RampSystem: trigger advances position 0→1 over rampTime", "[ramp]")
+TEST_CASE ("RampSystem: trigger advances position 0->1 over rampTime", "[ramp]")
 {
     RampSystem ramp;
     const double sr       = 44100.0;
@@ -186,7 +186,7 @@ TEST_CASE ("RampSystem: trigger reverses direction", "[ramp]")
     ramp.process (static_cast<int> (sr));
     REQUIRE (ramp.getPosition() > 0.99f);
 
-    // Trigger → now goes B→A
+    // Trigger -> now goes B->A
     ramp.trigger();
     ramp.process (static_cast<int> (sr));
     REQUIRE (ramp.getPosition() < 0.01f);
@@ -208,7 +208,7 @@ TEST_CASE ("RampSystem: position clamps at 0 and 1", "[ramp]")
 
 // ── InvertMode ───────────────────────────────────────────────────────────────
 
-TEST_CASE ("LiminalEngine: invertMode=false, above threshold → blend = 0", "[invert]")
+TEST_CASE ("LiminalEngine: invertMode=false, above threshold -> blend = 0", "[invert]")
 {
     LiminalEngine engine;
     engine.prepare (makeSpec());
@@ -224,7 +224,7 @@ TEST_CASE ("LiminalEngine: invertMode=false, above threshold → blend = 0", "[i
     REQUIRE_THAT (engine.getCurrentBlend(), Catch::Matchers::WithinAbs (0.f, 0.01f));
 }
 
-TEST_CASE ("LiminalEngine: invertMode=true, above threshold → blend > 0", "[invert]")
+TEST_CASE ("LiminalEngine: invertMode=true, above threshold -> blend > 0", "[invert]")
 {
     LiminalEngine engine;
     engine.prepare (makeSpec());
@@ -242,7 +242,7 @@ TEST_CASE ("LiminalEngine: invertMode=true, above threshold → blend > 0", "[in
     REQUIRE (engine.getCurrentBlend() > 0.5f);
 }
 
-TEST_CASE ("LiminalEngine: invertMode=true, below threshold → blend = 0", "[invert]")
+TEST_CASE ("LiminalEngine: invertMode=true, below threshold -> blend = 0", "[invert]")
 {
     LiminalEngine engine;
     engine.prepare (makeSpec());
@@ -260,7 +260,7 @@ TEST_CASE ("LiminalEngine: invertMode=true, below threshold → blend = 0", "[in
 
 // ── Tone ─────────────────────────────────────────────────────────────────────
 
-TEST_CASE ("LiminalEngine: tone=0 → output unchanged from dry (silence in)", "[tone]")
+TEST_CASE ("LiminalEngine: tone=0 -> output unchanged from dry (silence in)", "[tone]")
 {
     LiminalEngine engine;
     engine.prepare (makeSpec());
