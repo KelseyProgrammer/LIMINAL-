@@ -21,7 +21,10 @@ private:
     static constexpr int kNumChannels        = 2;
 
     juce::dsp::DelayLine<float> diffusionLines[kNumChannels][kNumDiffusionStages];
-    float diffusionCoeffs[kNumDiffusionStages] = { 0.7f, 0.6f, 0.5f, 0.4f };
+    // Softer coefficients reduce metallic ringing in the diffusion network
+    float diffusionCoeffs[kNumDiffusionStages] = { 0.52f, 0.42f, 0.33f, 0.25f };
+    // One-pole LP state in the allpass feedback path — prevents high-frequency buildup
+    float diffFbLP[kNumChannels][kNumDiffusionStages] = {};
 
     // Pre-delay
     juce::dsp::DelayLine<float> preDelay[kNumChannels];

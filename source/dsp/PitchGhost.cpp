@@ -56,6 +56,13 @@ void PitchGhost::process (juce::AudioBuffer<float>& buffer, float blendFactor)
 
         const float env = decayEnvelope * fadeInEnv * blendFactor;
 
+        // Crossfade window near loop boundaries to prevent clicks on wrap-around.
+        // Fade in over the first 256 samples, fade out over the last 256 samples.
+        const float fadeZone   = juce::jmin (256.f, static_cast<float> (captureLength) * 0.05f);
+        const float distToEnd  = static_cast<float> (captureLength) - captureReadPos;
+        const float loopGain   = juce::jmin (1.f,
+                                  juce::jmin (captureReadPos, distToEnd) / fadeZone);
+
         for (int ch = 0; ch < numChannels; ++ch)
         {
             // Linear interpolation from capture buffer (looping)
@@ -67,7 +74,7 @@ void PitchGhost::process (juce::AudioBuffer<float>& buffer, float blendFactor)
             const auto* cap = captureBuffer.getReadPointer (ch);
             const float ghostSample = cap[iIdx] * (1.f - frac) + cap[iIdx1] * frac;
 
-            buffer.getWritePointer (ch)[s] += ghostSample * env;
+            buffer.getWritePointer (ch)[s] += ghostSample * env * loopGain;
         }
 
         captureReadPos = std::fmod (captureReadPos + ratio, static_cast<float> (captureLength));

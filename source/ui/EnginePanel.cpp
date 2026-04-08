@@ -45,10 +45,10 @@ void EnginePanel::resized()
 {
     auto area = getLocalBounds().reduced (6);
     const int labelH = 14;
-    const int glyphH = 26;
+    const int glyphH = 30;  // taller indicator bar to match reference image
 
-    area.removeFromTop (labelH + 2);   // engine label
-    area.removeFromBottom (glyphH + 4); // glyph strip
+    area.removeFromTop (labelH + 2);    // engine label
+    area.removeFromBottom (glyphH + 4); // glyph/indicator strip
 
     if (primaryKnob)
         primaryKnob->setBounds (area.removeFromTop (std::min (area.getWidth(), area.getHeight())));
@@ -111,13 +111,38 @@ void EnginePanel::paint (juce::Graphics& g)
                 bounds.reduced (4.f).removeFromTop (14.f),
                 juce::Justification::centred);
 
-    // ── Glyph strip (darker inset at bottom) ─────────────────────────────────
-    const float glyphH    = 26.f;
+    // ── Glyph strip — colored indicator bar at the bottom of each panel ─────────
+    const float glyphH    = 30.f;
     const auto glyphStrip = bounds.reduced (4.f).removeFromBottom (glyphH);
 
-    // Darker background behind glyph
-    g.setColour (juce::Colour (0x40000000));
+    // Base dark background
+    g.setColour (juce::Colour (0xff080d20));
     g.fillRoundedRectangle (glyphStrip, 3.f);
+
+    // Colored fill proportional to activation — uses the engine's accent color
+    const juce::Colour engineColors[3] = {
+        LiminalLookAndFeel::ICE_BLUE,
+        LiminalLookAndFeel::GOLD,
+        LiminalLookAndFeel::GHOST_WHITE
+    };
+    const juce::Colour ec = engineColors[static_cast<int> (engineType)];
+
+    // Horizontal colored gradient fill — fills left-to-right as engine activates
+    if (glowIntensity > 0.005f)
+    {
+        juce::ColourGradient fillGrad (ec.withAlpha (glowIntensity * 0.28f),
+                                       glyphStrip.getX(), glyphStrip.getCentreY(),
+                                       ec.withAlpha (0.f),
+                                       glyphStrip.getRight(), glyphStrip.getCentreY(),
+                                       false);
+        g.setGradientFill (fillGrad);
+        g.fillRoundedRectangle (glyphStrip, 3.f);
+    }
+
+    // Thin top border line on glyph strip (subtle gold separation)
+    g.setColour (LiminalLookAndFeel::GOLD.withAlpha (0.25f + glowIntensity * 0.25f));
+    g.drawLine (glyphStrip.getX() + 4.f, glyphStrip.getY(),
+                glyphStrip.getRight() - 4.f, glyphStrip.getY(), 0.75f);
 
     switch (engineType)
     {

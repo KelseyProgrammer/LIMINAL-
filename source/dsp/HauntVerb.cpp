@@ -75,14 +75,19 @@ void HauntVerb::process (juce::AudioBuffer<float>& buffer, float blendFactor)
             preDelay[ch].pushSample (ch, input);
             float sig = preDelay[ch].popSample (ch);
 
-            // 4-stage allpass diffusion
+            // 4-stage allpass diffusion with LP in the feedback path.
+            // The LP filter (coeff ~0.28) attenuates highs that accumulate through
+            // repeated feedback, eliminating the metallic ringing / "grinding" quality.
             for (int stage = 0; stage < kNumDiffusionStages; ++stage)
             {
                 const float g   = diffusionCoeffs[stage];
                 const float del = diffusionLines[ch][stage].popSample (ch);
                 const float v   = sig - g * del;
-                diffusionLines[ch][stage].pushSample (ch, v);
-                sig = del + g * v;
+                // One-pole LP on the feedback signal: fc ≈ sr * lp / (2*pi) ≈ ~2kHz at 44.1kHz
+                const float lp  = 0.28f;
+                diffFbLP[ch][stage] = lp * v + (1.f - lp) * diffFbLP[ch][stage];
+                diffusionLines[ch][stage].pushSample (ch, diffFbLP[ch][stage]);
+                sig = del + g * diffFbLP[ch][stage];
             }
 
             // HP sweep (applied per-channel via mono filter; acceptable for a reverb tail)

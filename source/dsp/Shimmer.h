@@ -3,16 +3,17 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_dsp/juce_dsp.h>
 
-// Simple granular pitch shifter voice using two overlapping grains
+// Granular pitch shifter voice using two overlapping grains with distance-based windowing.
+// The read head starts kGrainSamples behind the write head to avoid reading unwritten data.
 struct PitchShifterVoice
 {
-    static constexpr int kGrainSamples = 2048;
+    // Larger grain size = smoother transitions, fewer audible grain boundaries
+    static constexpr int kGrainSamples = 4096;
 
     juce::AudioBuffer<float> grainBuffer;
-    int   writePos    = 0;
-    float readPos     = 0.f;
-    float pitchRatio  = 1.f;
-    float windowPhase = 0.f;  // 0–1 through grain window
+    int   writePos   = 0;
+    float readPos    = 0.f;
+    float pitchRatio = 1.f;
 
     void prepare (const juce::dsp::ProcessSpec& spec);
 
@@ -40,11 +41,14 @@ private:
     juce::AudioBuffer<float> feedbackBuffer;
 
     float crystallizeAmount = 0.f;
-    float feedbackLevel     = 0.3f;  // reduced from 0.5 — less aggressive buildup
+    float feedbackLevel     = 0.15f; // conservative — prevents metallic buildup
     int   intervalSemitones = 12;
 
     // Frozen output for crystallize=1 hold
     juce::AudioBuffer<float> frozenBuffer;
+
+    // One-pole LP per channel to smooth grain boundary artifacts
+    float lpState[2] = {};
 
     double sampleRate = 44100.0;
 };

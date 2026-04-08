@@ -15,14 +15,16 @@ public:
     explicit PluginEditor (PluginProcessor&);
     ~PluginEditor() override;
 
-    void paint   (juce::Graphics&) override;
-    void resized () override;
+    void paint              (juce::Graphics&) override;
+    void paintOverChildren  (juce::Graphics&) override;
+    void resized            () override;
 
 private:
     void timerCallback() override;
 
     void drawFiligreeBorder         (juce::Graphics& g);
     void drawCelestialDecorations   (juce::Graphics& g);
+    void drawCornerMedallion        (juce::Graphics& g, float cx, float cy, float r);
     static void draw4PointStar      (juce::Graphics& g, float cx, float cy, float r);
     static void drawCrescent        (juce::Graphics& g, float cx, float cy, float r);
 
