@@ -2,17 +2,23 @@
 
 KnobComponent::KnobComponent (const juce::String& paramID,
                                const juce::String& label,
-                               juce::AudioProcessorValueTreeState& apvts)
-    : labelText (label)
+                               juce::AudioProcessorValueTreeState& apvts,
+                               bool showLabel)
+    : labelText (label),
+      labelVisible (showLabel)
 {
     slider.setName (paramID);  // used by LiminalLookAndFeel to detect mod knobs
     slider.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
     slider.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
+    slider.setPopupDisplayEnabled (true, false, nullptr);
     addAndMakeVisible (slider);
 
-    labelComponent.setText (label, juce::dontSendNotification);
-    labelComponent.setJustificationType (juce::Justification::centred);
-    addAndMakeVisible (labelComponent);
+    if (labelVisible)
+    {
+        labelComponent.setText (label, juce::dontSendNotification);
+        labelComponent.setJustificationType (juce::Justification::centred);
+        addAndMakeVisible (labelComponent);
+    }
 
     attachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (
         apvts, paramID, slider);
@@ -21,8 +27,13 @@ KnobComponent::KnobComponent (const juce::String& paramID,
 void KnobComponent::resized()
 {
     auto area = getLocalBounds();
-    const int labelH = 16;
-    labelComponent.setBounds (area.removeFromBottom (labelH));
+
+    if (labelVisible)
+    {
+        const int labelH = 16;
+        labelComponent.setBounds (area.removeFromBottom (labelH));
+    }
+
     slider.setBounds (area);
 }
 

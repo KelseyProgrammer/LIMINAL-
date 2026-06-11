@@ -10,12 +10,12 @@ EnginePanel::EnginePanel (Engine engine,
     switch (engine)
     {
         case Engine::HauntVerb:
-            primaryKnob = std::make_unique<KnobComponent> ("haunt", "HAUNT", apvts);
+            primaryKnob = std::make_unique<KnobComponent> ("haunt", "HAUNT", apvts, false);
             addAndMakeVisible (*primaryKnob);
             break;
 
         case Engine::Shimmer:
-            primaryKnob = std::make_unique<KnobComponent> ("crystallize", "CRYSTALLIZE", apvts);
+            primaryKnob = std::make_unique<KnobComponent> ("crystallize", "CRYSTALLIZE", apvts, false);
             addAndMakeVisible (*primaryKnob);
 
             intervalBox = std::make_unique<juce::ComboBox>();
@@ -26,7 +26,7 @@ EnginePanel::EnginePanel (Engine engine,
             break;
 
         case Engine::PitchGhost:
-            primaryKnob = std::make_unique<KnobComponent> ("possession", "POSSESSION", apvts);
+            primaryKnob = std::make_unique<KnobComponent> ("possession", "POSSESSION", apvts, false);
             addAndMakeVisible (*primaryKnob);
             break;
     }
@@ -41,85 +41,45 @@ void EnginePanel::setActive (bool isActive)
     repaint();
 }
 
+void EnginePanel::setGlowLevel (float blend)
+{
+    blendLevel = blend;
+}
+
+juce::Point<int> EnginePanel::knobCentreInPanel() const
+{
+    // Painted knob centres (absolute: 167/472/779 at y=401) relative to the
+    // panel bounds set in PluginEditor::resized().
+    switch (engineType)
+    {
+        case Engine::HauntVerb:  return { 157, 46 };
+        case Engine::Shimmer:    return { 152, 46 };
+        case Engine::PitchGhost: return { 144, 46 };
+    }
+    return { getWidth() / 2, 46 };
+}
+
 void EnginePanel::resized()
 {
-    auto area = getLocalBounds().reduced (6);
-    const int labelH = 14;
-    const int glyphH = 30;  // taller indicator bar to match reference image
-
-    area.removeFromTop (labelH + 2);    // engine label
-    area.removeFromBottom (glyphH + 4); // glyph/indicator strip
-
+    const auto kc = knobCentreInPanel();
+    const int knobSize = 52;
     if (primaryKnob)
-        primaryKnob->setBounds (area.removeFromTop (std::min (area.getWidth(), area.getHeight())));
+        primaryKnob->setBounds (kc.x - knobSize / 2, kc.y - knobSize / 2, knobSize, knobSize);
 
+    // Interval selector tucked into the lower-right of the Shimmer panel
     if (intervalBox)
-        intervalBox->setBounds (area.removeFromTop (22));
+        intervalBox->setBounds (getWidth() - 86, getHeight() - 28, 76, 20);
 }
 
 void EnginePanel::paint (juce::Graphics& g)
 {
-    const auto bounds  = getLocalBounds().toFloat();
-    const auto reduced = bounds.reduced (1.f);
+    // The panel frame and labels are part of the background artwork —
+    // draw only additive light on top of it.
+    if (glowIntensity < 0.005f)
+        return;
 
-    // ── Dark navy fill ────────────────────────────────────────────────────────
-    g.setColour (juce::Colour (0xff0d1535));
-    g.fillRoundedRectangle (reduced, 5.f);
+    const auto bounds = getLocalBounds().toFloat();
 
-    // ── Per-engine activation glow overlay ───────────────────────────────────
-    if (glowIntensity > 0.005f)
-    {
-        const juce::Colour engineGlowColors[3] = {
-            LiminalLookAndFeel::ICE_BLUE,
-            LiminalLookAndFeel::GOLD,
-            LiminalLookAndFeel::GHOST_WHITE
-        };
-        const juce::Colour glowCol = engineGlowColors[static_cast<int> (engineType)];
-        juce::ColourGradient glow (glowCol.withAlpha (glowIntensity * 0.12f),
-                                   bounds.getCentreX(), bounds.getCentreY(),
-                                   glowCol.withAlpha (0.f),
-                                   bounds.getRight(), bounds.getCentreY(),
-                                   true);
-        g.setGradientFill (glow);
-        g.fillRoundedRectangle (reduced, 5.f);
-    }
-
-    // ── Gold border ───────────────────────────────────────────────────────────
-    g.setColour (LiminalLookAndFeel::GOLD.withAlpha (0.65f + glowIntensity * 0.35f));
-    g.drawRoundedRectangle (reduced, 5.f, 1.f);
-
-    // ── Corner stars ✧ (top-left and top-right) ───────────────────────────────
-    const float starAlpha = 0.4f + glowIntensity * 0.5f;
-    g.setColour (LiminalLookAndFeel::GOLD.withAlpha (starAlpha));
-    const float sr = 4.f;
-    const float positions[2][2] = { { reduced.getX() + 7.f, reduced.getY() + 7.f },
-                                     { reduced.getRight() - 7.f, reduced.getY() + 7.f } };
-    for (auto [sx, sy] : positions)
-    {
-        for (int i = 0; i < 4; ++i)
-        {
-            const float a = i * juce::MathConstants<float>::halfPi;
-            g.drawLine (sx, sy, sx + sr * std::cos (a), sy + sr * std::sin (a), 0.75f);
-        }
-    }
-
-    // ── Engine label ──────────────────────────────────────────────────────────
-    const juce::String labels[] = { "HAUNT VERB", "SHIMMER", "PITCH GHOST" };
-    g.setColour (LiminalLookAndFeel::GOLD.withAlpha (0.8f + glowIntensity * 0.2f));
-    g.setFont (juce::Font (juce::FontOptions().withHeight (9.f).withStyle ("Bold")));
-    g.drawText (labels[static_cast<int> (engineType)],
-                bounds.reduced (4.f).removeFromTop (14.f),
-                juce::Justification::centred);
-
-    // ── Glyph strip — colored indicator bar at the bottom of each panel ─────────
-    const float glyphH    = 30.f;
-    const auto glyphStrip = bounds.reduced (4.f).removeFromBottom (glyphH);
-
-    // Base dark background
-    g.setColour (juce::Colour (0xff080d20));
-    g.fillRoundedRectangle (glyphStrip, 3.f);
-
-    // Colored fill proportional to activation — uses the engine's accent color
     const juce::Colour engineColors[3] = {
         LiminalLookAndFeel::ICE_BLUE,
         LiminalLookAndFeel::GOLD,
@@ -127,51 +87,39 @@ void EnginePanel::paint (juce::Graphics& g)
     };
     const juce::Colour ec = engineColors[static_cast<int> (engineType)];
 
-    // Horizontal colored gradient fill — fills left-to-right as engine activates
-    if (glowIntensity > 0.005f)
-    {
-        juce::ColourGradient fillGrad (ec.withAlpha (glowIntensity * 0.28f),
-                                       glyphStrip.getX(), glyphStrip.getCentreY(),
-                                       ec.withAlpha (0.f),
-                                       glyphStrip.getRight(), glyphStrip.getCentreY(),
-                                       false);
-        g.setGradientFill (fillGrad);
-        g.fillRoundedRectangle (glyphStrip, 3.f);
-    }
+    // Soft activation wash across the panel, strongest near the knob
+    const auto kc = knobCentreInPanel().toFloat();
+    const float washAlpha = glowIntensity * (0.05f + blendLevel * 0.10f);
+    juce::ColourGradient wash (ec.withAlpha (washAlpha),
+                               kc.x, kc.y,
+                               ec.withAlpha (0.f),
+                               kc.x + bounds.getWidth() * 0.55f, kc.y,
+                               true);
+    g.setGradientFill (wash);
+    g.fillRoundedRectangle (bounds.reduced (3.f), 8.f);
 
-    // Thin top border line on glyph strip (subtle gold separation)
-    g.setColour (LiminalLookAndFeel::GOLD.withAlpha (0.25f + glowIntensity * 0.25f));
-    g.drawLine (glyphStrip.getX() + 4.f, glyphStrip.getY(),
-                glyphStrip.getRight() - 4.f, glyphStrip.getY(), 0.75f);
+    // Glyph pulse over the painted icon below the engine label
+    const float gx = kc.x;
+    const float gy = bounds.getHeight() - 23.f;
+    const float gr = 7.f;
+    const float glyphAlpha = glowIntensity * (0.25f + blendLevel * 0.75f);
 
+    juce::ColourGradient halo (ec.withAlpha (glyphAlpha * 0.35f), gx, gy,
+                               ec.withAlpha (0.f), gx + gr * 2.6f, gy, true);
+    g.setGradientFill (halo);
+    g.fillEllipse (gx - gr * 2.6f, gy - gr * 2.6f, gr * 5.2f, gr * 5.2f);
+
+    g.setColour (ec.withAlpha (glyphAlpha));
     switch (engineType)
     {
-        case Engine::HauntVerb:   drawHauntGlyph   (g, glyphStrip); break;
-        case Engine::Shimmer:     drawShimmerGlyph (g, glyphStrip); break;
-        case Engine::PitchGhost:  drawGhostGlyph   (g, glyphStrip); break;
+        case Engine::HauntVerb:   drawHauntGlyph   (g, gx, gy, gr); break;
+        case Engine::Shimmer:     drawShimmerGlyph (g, gx, gy, gr); break;
+        case Engine::PitchGhost:  drawGhostGlyph   (g, gx, gy, gr); break;
     }
 }
 
-void EnginePanel::drawHauntGlyph (juce::Graphics& g, juce::Rectangle<float> area) const
+void EnginePanel::drawHauntGlyph (juce::Graphics& g, float cx, float cy, float r) const
 {
-    const juce::Colour col = active ? LiminalLookAndFeel::ICE_BLUE
-                                    : LiminalLookAndFeel::TEXT_DIM;
-    if (glowIntensity > 0.01f)
-    {
-        juce::ColourGradient glow (col.withAlpha (glowIntensity * 0.3f),
-                                   area.getCentreX(), area.getCentreY(),
-                                   col.withAlpha (0.f),
-                                   area.getCentreX() + area.getWidth() * 0.5f, area.getCentreY(),
-                                   true);
-        g.setGradientFill (glow);
-        g.fillEllipse (area.reduced (2.f));
-    }
-
-    const float cx = area.getCentreX();
-    const float cy = area.getCentreY();
-    const float r  = area.getHeight() * 0.38f;
-
-    g.setColour (col);
     juce::Path arc;
     arc.addCentredArc (cx, cy, r, r, 0.f,
                        juce::MathConstants<float>::pi * 0.55f,
@@ -179,25 +127,8 @@ void EnginePanel::drawHauntGlyph (juce::Graphics& g, juce::Rectangle<float> area
     g.strokePath (arc, juce::PathStrokeType (1.5f));
 }
 
-void EnginePanel::drawShimmerGlyph (juce::Graphics& g, juce::Rectangle<float> area) const
+void EnginePanel::drawShimmerGlyph (juce::Graphics& g, float cx, float cy, float r) const
 {
-    const juce::Colour col = active ? LiminalLookAndFeel::GOLD : LiminalLookAndFeel::GOLD_DIM;
-
-    if (glowIntensity > 0.01f)
-    {
-        juce::ColourGradient glow (col.withAlpha (glowIntensity * 0.3f),
-                                   area.getCentreX(), area.getCentreY(),
-                                   col.withAlpha (0.f),
-                                   area.getCentreX() + area.getWidth() * 0.5f, area.getCentreY(),
-                                   true);
-        g.setGradientFill (glow);
-        g.fillEllipse (area.reduced (2.f));
-    }
-
-    const float cx = area.getCentreX();
-    const float cy = area.getCentreY();
-    const float r  = area.getHeight() * 0.38f;
-
     juce::Path star;
     const float step     = juce::MathConstants<float>::twoPi / 6.f;
     const float startAng = -juce::MathConstants<float>::halfPi;
@@ -215,30 +146,11 @@ void EnginePanel::drawShimmerGlyph (juce::Graphics& g, juce::Rectangle<float> ar
         star.lineTo (inner);
     }
     star.closeSubPath();
-
-    g.setColour (col);
     g.strokePath (star, juce::PathStrokeType (1.5f));
 }
 
-void EnginePanel::drawGhostGlyph (juce::Graphics& g, juce::Rectangle<float> area) const
+void EnginePanel::drawGhostGlyph (juce::Graphics& g, float cx, float cy, float r) const
 {
-    const juce::Colour col = active ? LiminalLookAndFeel::GHOST_WHITE
-                                    : LiminalLookAndFeel::TEXT_DIM;
-    if (glowIntensity > 0.01f)
-    {
-        juce::ColourGradient glow (col.withAlpha (glowIntensity * 0.25f),
-                                   area.getCentreX(), area.getCentreY(),
-                                   col.withAlpha (0.f),
-                                   area.getCentreX() + area.getWidth() * 0.5f, area.getCentreY(),
-                                   true);
-        g.setGradientFill (glow);
-        g.fillEllipse (area.reduced (2.f));
-    }
-
-    const float cx = area.getCentreX();
-    const float cy = area.getCentreY();
-    const float r  = area.getHeight() * 0.38f;
-
     juce::Path star;
     const float step     = juce::MathConstants<float>::twoPi / 4.f;
     const float startAng = -juce::MathConstants<float>::halfPi;
@@ -256,7 +168,5 @@ void EnginePanel::drawGhostGlyph (juce::Graphics& g, juce::Rectangle<float> area
         star.lineTo (inner);
     }
     star.closeSubPath();
-
-    g.setColour (col);
     g.strokePath (star, juce::PathStrokeType (1.5f));
 }

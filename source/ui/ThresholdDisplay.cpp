@@ -3,6 +3,19 @@
 
 #include <cmath>
 
+// Geometry of the painted star in the background artwork, in this
+// component's local coordinates (bounds are centred on the painted star):
+//   centre        = (width/2, height/2)
+//   hexagram tips ≈ 50 px
+//   compass ring  ≈ 87 px
+namespace
+{
+    constexpr float kStarBaseR    = 50.f;
+    constexpr float kCompassR     = 87.f;
+    constexpr float kRingMinR     = 58.f;   // threshold ring at threshold = 0
+    constexpr float kRingSpanR    = 46.f;   // ring travel up to threshold = 1
+}
+
 ThresholdDisplay::ThresholdDisplay()
 {
     setOpaque (false);
@@ -12,6 +25,38 @@ ThresholdDisplay::ThresholdDisplay()
 ThresholdDisplay::~ThresholdDisplay()
 {
     stopTimer();
+}
+
+float ThresholdDisplay::thresholdToRadius (float threshold)
+{
+    return kRingMinR + threshold * kRingSpanR;
+}
+
+float ThresholdDisplay::radiusToThreshold (float radius) const
+{
+    return juce::jlimit (0.f, 1.f, (radius - kRingMinR) / kRingSpanR);
+}
+
+void ThresholdDisplay::mouseDown (const juce::MouseEvent& e)
+{
+    draggingThreshold = true;
+    if (onThresholdDragStart) onThresholdDragStart();
+    mouseDrag (e);
+}
+
+void ThresholdDisplay::mouseDrag (const juce::MouseEvent& e)
+{
+    if (! draggingThreshold) return;
+
+    const auto centre = getLocalBounds().toFloat().getCentre();
+    const float r = e.position.getDistanceFrom (centre);
+    if (onThresholdDrag) onThresholdDrag (radiusToThreshold (r));
+}
+
+void ThresholdDisplay::mouseUp (const juce::MouseEvent&)
+{
+    if (draggingThreshold && onThresholdDragEnd) onThresholdDragEnd();
+    draggingThreshold = false;
 }
 
 void ThresholdDisplay::timerCallback()
@@ -50,6 +95,11 @@ void ThresholdDisplay::timerCallback()
     starRotation += rotationSpeed;
     if (starRotation >= 360.f) starRotation -= 360.f;
 
+    // Idle breathing — keeps the card subtly alive even in full dry signal
+    breathePhase += 0.025f;
+    if (breathePhase > juce::MathConstants<float>::twoPi)
+        breathePhase -= juce::MathConstants<float>::twoPi;
+
     displayBlend     = newBlend;
     displayEnvelope  = newEnv;
     displayThreshold = newThresh;
@@ -59,8 +109,7 @@ void ThresholdDisplay::timerCallback()
 
 void ThresholdDisplay::resized() {}
 
-// Draw a hexagram (Star of David) — two overlapping equilateral triangles.
-// outerR = tip-to-center radius, innerR = inner hexagon radius ≈ outerR * 0.38.
+// Draw a hexagram (Star of David) outline.
 static void drawHexagram (juce::Graphics& g, float cx, float cy,
                            float outerR, float innerR, float rotRad,
                            juce::Colour stroke, float strokeW,
@@ -93,7 +142,7 @@ static void drawHexagram (juce::Graphics& g, float cx, float cy,
                                                juce::PathStrokeType::rounded));
 }
 
-// Draw N radiating rays from each of the 6 hexagram tip positions.
+// Rays radiating from the 6 hexagram tips.
 static void drawHexRays (juce::Graphics& g, float cx, float cy,
                           float fromR, float toR, float rotRad,
                           juce::Colour col, float strokeW)
@@ -115,70 +164,58 @@ void ThresholdDisplay::paint (juce::Graphics& g)
 {
     const auto  bounds  = getLocalBounds().toFloat();
     const auto  centre  = bounds.getCentre();
-    const float minDim  = std::min (bounds.getWidth(), bounds.getHeight());
     const float blend   = displayBlend;
     const float rotRad  = starRotation * juce::MathConstants<float>::pi / 180.f;
+    const float breathe = 0.5f + 0.5f * std::sin (breathePhase);
 
     // ── Knob-driven display parameters ────────────────────────────────────────
     // DEPTH (0–1): scales star size and overall glow brightness.
-    const float depthScale = 0.60f + displayDepth * 0.40f;
+    const float depthScale = 0.70f + displayDepth * 0.30f;
 
     // TONE (−1…+1): interpolates star/ray colour between cool and warm.
-    // −1 = ICE_BLUE, 0 = GOLD, +1 = warm amber-white (#fce8a0)
-    const float toneT = (displayTone + 1.f) * 0.5f;   // 0→1
+    const float toneT = (displayTone + 1.f) * 0.5f;
     const juce::Colour toneColour =
         (toneT < 0.5f)
         ? LiminalLookAndFeel::ICE_BLUE.interpolatedWith (LiminalLookAndFeel::GOLD, toneT * 2.f)
         : LiminalLookAndFeel::GOLD.interpolatedWith     (juce::Colour (0xfffce8a0), (toneT - 0.5f) * 2.f);
 
-    // Glow colour also shifts: cool blue at negative tone, warm amber at positive
     const juce::Colour glowColour =
         (toneT < 0.5f)
         ? juce::Colour (0xff3355bb).interpolatedWith (juce::Colour (0xff884400), toneT * 2.f)
         : juce::Colour (0xff884400).interpolatedWith (juce::Colour (0xffcc7700), (toneT - 0.5f) * 2.f);
 
-    // ── Radial darkening (centres the display, lets nebula show at edges) ─────
+    // ── Breathing ambient glow over the painted star ─────────────────────────
+    // Mostly blend-driven; a faint idle pulse keeps the star alive when dry.
     {
-        juce::ColourGradient v (juce::Colour (0x44050a1a), centre.x, centre.y,
-                                juce::Colour (0x00050a1a),
-                                centre.x + minDim * 0.55f, centre.y, true);
-        g.setGradientFill (v); g.fillRect (bounds);
-    }
+        const float gd   = depthScale;
+        const float idle = 0.030f + breathe * 0.030f;
 
-    // ── LARGE ambient glow — tinted by TONE, sized by DEPTH ──────────────────
-    // Three radial layers: outer haze, mid bloom, inner core.
-    // glowColour shifts from cool-blue (tone=-1) through amber (tone=0) to warm-white (tone=+1).
-    {
-        const float gd = depthScale;  // depth modulates brightness
-
-        const float r1 = minDim * (0.48f + blend * 0.22f);
-        juce::ColourGradient ga (glowColour.withAlpha ((0.08f + blend * 0.09f) * gd),
+        const float r1 = 95.f + blend * 45.f;
+        juce::ColourGradient ga (glowColour.withAlpha ((idle + blend * 0.16f) * gd),
                                   centre.x, centre.y,
                                   glowColour.withAlpha (0.f), centre.x + r1, centre.y, true);
         g.setGradientFill (ga); g.fillEllipse (centre.x-r1, centre.y-r1, r1*2, r1*2);
 
-        const float r2 = minDim * (0.28f + blend * 0.14f);
-        juce::ColourGradient gb (glowColour.withAlpha ((0.14f + blend * 0.22f) * gd),
+        const float r2 = 55.f + blend * 28.f;
+        juce::ColourGradient gb (glowColour.withAlpha ((idle + blend * 0.30f) * gd),
                                   centre.x, centre.y,
                                   glowColour.withAlpha (0.f), centre.x + r2, centre.y, true);
         g.setGradientFill (gb); g.fillEllipse (centre.x-r2, centre.y-r2, r2*2, r2*2);
 
-        const float r3 = minDim * (0.13f + blend * 0.08f);
-        juce::ColourGradient gc (glowColour.withAlpha ((0.28f + blend * 0.38f) * gd),
+        const float r3 = 26.f + blend * 16.f;
+        juce::ColourGradient gc (glowColour.withAlpha ((idle * 1.5f + blend * 0.45f) * gd),
                                   centre.x, centre.y,
                                   glowColour.withAlpha (0.f), centre.x + r3, centre.y, true);
         g.setGradientFill (gc); g.fillEllipse (centre.x-r3, centre.y-r3, r3*2, r3*2);
     }
 
-    // ── Downward warm burst — amber cone below the star ──────────────────────
-    // In the reference this is a warm, atmospheric glow — present but not
-    // dominating. The reference shows subtle amber light, not a blazing dome.
+    // ── Downward warm exhale — only while engines are awake ──────────────────
+    if (blend > 0.01f)
     {
-        const float burstW = minDim * (0.65f + blend * 0.20f);
-        const float burstH = bounds.getHeight() * (0.75f + blend * 0.15f);
-        const float alpha  = 0.15f + blend * 0.22f;   // calm: visible but not overpowering
+        const float burstW = 130.f + blend * 70.f;
+        const float burstH = 130.f + blend * 60.f;
+        const float alpha  = blend * 0.30f;
 
-        // Wide gentle cone
         juce::ColourGradient burst (juce::Colour (0xff7700).withAlpha (alpha * 0.65f),
                                     centre.x, centre.y,
                                     juce::Colour (0x00ff5500),
@@ -186,134 +223,103 @@ void ThresholdDisplay::paint (juce::Graphics& g)
         burst.addColour (0.4, juce::Colour (0xff5500).withAlpha (alpha * 0.28f));
         g.setGradientFill (burst);
         g.fillEllipse (centre.x - burstW * 0.5f, centre.y - 8.f, burstW, burstH);
-
-        // Narrower bright core
-        const float coreW = minDim * (0.22f + blend * 0.08f);
-        juce::ColourGradient core (juce::Colour (0xffaa44).withAlpha (alpha * 0.85f),
-                                    centre.x, centre.y,
-                                    juce::Colour (0x00ffaa44),
-                                    centre.x, centre.y + burstH * 0.55f, false);
-        g.setGradientFill (core);
-        g.fillEllipse (centre.x - coreW * 0.5f, centre.y, coreW, burstH * 0.55f);
     }
 
-    // ── Threshold crossing flash ───────────────────────────────────────────────
+    // ── Threshold crossing flash ──────────────────────────────────────────────
     if (flashIntensity > 0.f)
     {
-        const float flashR = minDim * 0.55f;
-        juce::ColourGradient flash (juce::Colour (0xffffee88).withAlpha (flashIntensity * 0.35f),
+        const float flashR = 120.f;
+        juce::ColourGradient flash (juce::Colour (0xffffee88).withAlpha (flashIntensity * 0.32f),
                                     centre.x, centre.y,
                                     juce::Colour (0x00ffee88), centre.x + flashR, centre.y, true);
         g.setGradientFill (flash); g.fillRect (bounds);
     }
 
-    // ── Star geometry — DEPTH scales size; calibrated to match reference ───────
-    const float outerR = minDim * (0.210f + blend * 0.14f) * depthScale;
+    // ── Star geometry — DEPTH scales size, blend makes it bloom ──────────────
+    const float outerR = kStarBaseR * depthScale * (1.f + blend * 0.16f);
     const float innerR = outerR * 0.375f;
     const float coreR  = outerR * 0.26f;
-    const float rayEnd = outerR * 2.10f;
+    const float rayEnd = outerR * (1.55f + blend * 0.45f);
 
-    // ── Outer decorative ring — largest circle, very faint ────────────────────
-    const float outerDecR = outerR * 2.05f;
-    g.setColour (LiminalLookAndFeel::GOLD.withAlpha (0.18f + blend * 0.12f));
-    g.drawEllipse (centre.x - outerDecR, centre.y - outerDecR,
-                   outerDecR * 2.f, outerDecR * 2.f, 0.6f);
-
-    // ── Threshold ring (gold, maps to threshold param) ────────────────────────
-    // Sits between outer decorative ring and compass ring.
-    const float threshR = outerR * (1.60f + displayThreshold * 0.35f);
-    g.setColour (LiminalLookAndFeel::GOLD.withAlpha (0.55f));
-    g.drawEllipse (centre.x - threshR, centre.y - threshR,
-                   threshR * 2.f, threshR * 2.f, 1.8f);
-    // Second parallel threshold line (double-ring effect)
-    g.setColour (LiminalLookAndFeel::GOLD.withAlpha (0.22f));
-    g.drawEllipse (centre.x - threshR - 4.f, centre.y - threshR - 4.f,
-                   (threshR + 4.f) * 2.f, (threshR + 4.f) * 2.f, 0.7f);
-
-    // ── Envelope ring (ice blue, moves with signal) ────────────────────────────
-    const float envR = outerR * (1.60f + displayEnvelope * 0.35f);
-    g.setColour (LiminalLookAndFeel::ICE_BLUE.withAlpha (0.42f));
-    g.drawEllipse (centre.x - envR, centre.y - envR,
-                   envR * 2.f, envR * 2.f, 1.2f);
-
-    // ── Main compass ring — the prominent ornate circle around the star ────────
-    const float compassR = outerR * 1.70f;
-
-    // Glow halo behind the compass ring
+    // ── Rotating compass ticks on the painted ring ────────────────────────────
     {
-        juce::ColourGradient halo (LiminalLookAndFeel::GOLD.withAlpha (0.10f + blend * 0.08f),
-                                    centre.x, centre.y,
-                                    juce::Colours::transparentBlack,
-                                    centre.x + compassR * 1.1f, centre.y, true);
-        g.setGradientFill (halo);
-        g.fillEllipse (centre.x - compassR * 1.1f, centre.y - compassR * 1.1f,
-                       compassR * 2.2f, compassR * 2.2f);
+        const float tickAlpha = 0.16f + blend * 0.55f;
+        for (int i = 0; i < 24; ++i)
+        {
+            const float a = rotRad * 0.5f + i * juce::MathConstants<float>::twoPi / 24.f;
+            const bool  major = (i % 6 == 0);
+            const float len   = major ? 7.f : 3.5f;
+            g.setColour (LiminalLookAndFeel::GOLD.withAlpha (tickAlpha * (major ? 1.f : 0.55f)));
+            g.drawLine (centre.x + std::cos(a) * (kCompassR - len),
+                        centre.y + std::sin(a) * (kCompassR - len),
+                        centre.x + std::cos(a) * kCompassR,
+                        centre.y + std::sin(a) * kCompassR,
+                        major ? 1.4f : 0.7f);
+        }
     }
 
-    // Main ring — thick and bright
-    g.setColour (LiminalLookAndFeel::GOLD.withAlpha (0.72f + blend * 0.22f));
-    g.drawEllipse (centre.x - compassR, centre.y - compassR,
-                   compassR * 2.f, compassR * 2.f, 1.8f);
-
-    // Second parallel ring just inside (double-line like a navigational compass)
-    g.setColour (LiminalLookAndFeel::GOLD.withAlpha (0.28f + blend * 0.15f));
-    g.drawEllipse (centre.x - compassR * 0.94f, centre.y - compassR * 0.94f,
-                   compassR * 1.88f, compassR * 1.88f, 0.7f);
-
-    // ── 24 tick marks on compass ring (8 major, 8 medium, 8 minor) ────────────
-    for (int i = 0; i < 24; ++i)
+    // ── Threshold ring (gold, draggable) ──────────────────────────────────────
+    const float threshR = thresholdToRadius (displayThreshold);
     {
-        const float a = i * juce::MathConstants<float>::twoPi / 24.f;
-        const bool  major  = (i % 6 == 0);   // 4 cardinal major ticks
-        const bool  medium = (i % 3 == 0);   // 8 medium ticks
-        const float inset  = major ? 9.f : (medium ? 6.f : 3.5f);
-        const float weight = major ? 1.8f : (medium ? 1.1f : 0.6f);
-        const float alpha  = major ? 0.92f : (medium ? 0.68f : 0.42f);
-        g.setColour (LiminalLookAndFeel::GOLD.withAlpha (alpha));
-        g.drawLine (centre.x + std::cos(a) * (compassR - inset),
-                    centre.y + std::sin(a) * (compassR - inset),
-                    centre.x + std::cos(a) * compassR,
-                    centre.y + std::sin(a) * compassR,
-                    weight);
+        const float ringAlpha = draggingThreshold ? 0.95f : (0.45f + blend * 0.25f);
+        g.setColour (LiminalLookAndFeel::GOLD.withAlpha (ringAlpha));
+        g.drawEllipse (centre.x - threshR, centre.y - threshR,
+                       threshR * 2.f, threshR * 2.f, draggingThreshold ? 2.2f : 1.5f);
+        g.setColour (LiminalLookAndFeel::GOLD.withAlpha (ringAlpha * 0.35f));
+        g.drawEllipse (centre.x - threshR - 3.f, centre.y - threshR - 3.f,
+                       (threshR + 3.f) * 2.f, (threshR + 3.f) * 2.f, 0.7f);
+
+        // Drag handle dots at the cardinal points while dragging
+        if (draggingThreshold)
+        {
+            g.setColour (juce::Colour (0xffffe8a0));
+            for (int i = 0; i < 4; ++i)
+            {
+                const float a = i * juce::MathConstants<float>::halfPi;
+                g.fillEllipse (centre.x + std::cos(a) * threshR - 2.5f,
+                               centre.y + std::sin(a) * threshR - 2.5f, 5.f, 5.f);
+            }
+        }
     }
 
-    // ── Inner ring (between compass and star, like an astrolabe band) ──────────
-    g.setColour (LiminalLookAndFeel::GOLD.withAlpha (0.30f + blend * 0.20f));
-    g.drawEllipse (centre.x - outerR * 1.20f, centre.y - outerR * 1.20f,
-                   outerR * 2.40f, outerR * 2.40f, 0.75f);
-
-    // ── Rays from the 6 hexagram tips — TONE sets the colour ──────────────────
-    // Glow layer (thick, transparent)
-    drawHexRays (g, centre.x, centre.y, outerR * 0.95f, rayEnd, rotRad,
-                 toneColour.withAlpha ((0.18f + blend * 0.22f) * 0.45f), 4.5f);
-    // Core rays (thin, bright)
-    drawHexRays (g, centre.x, centre.y, outerR * 0.95f, rayEnd, rotRad,
-                 toneColour.withAlpha (0.30f + blend * 0.50f), 1.0f);
-
-    // ── Main hexagram star — TONE colours the outline ─────────────────────────
+    // ── Envelope ring (ice blue, moves with the signal) ───────────────────────
     {
-        const float alpha = 0.40f + blend * 0.55f;
-
-        // Fill: blend between cool translucent blue and warm amber based on tone
-        const juce::Colour fillCol =
-            (toneT < 0.5f)
-            ? juce::Colour (0x220044cc).interpolatedWith (juce::Colour (0xffcc7700).withAlpha (alpha * 0.22f), toneT * 2.f)
-            : juce::Colour (0xffcc7700).withAlpha (alpha * 0.22f);
-        drawHexagram (g, centre.x, centre.y, outerR, innerR, rotRad,
-                      juce::Colours::transparentBlack, 0, fillCol);
-
-        // Bloom glow tinted by tone (softer than before — keeps gold visible)
-        drawHexagram (g, centre.x, centre.y, outerR, innerR, rotRad,
-                      toneColour.withAlpha (alpha * 0.20f), 4.5f);
-
-        // Core line: tone colour, warm — NOT brighter() to preserve the gold hue
-        drawHexagram (g, centre.x, centre.y, outerR, innerR, rotRad,
-                      toneColour.withAlpha (alpha * 0.90f), 1.4f);
+        const float envR = thresholdToRadius (juce::jlimit (0.f, 1.f, displayEnvelope));
+        g.setColour (LiminalLookAndFeel::ICE_BLUE.withAlpha (0.38f));
+        g.drawEllipse (centre.x - envR, centre.y - envR,
+                       envR * 2.f, envR * 2.f, 1.1f);
     }
 
-    // ── Inner 4-pointed star (counter-rotating bright diamond at center) ──────
+    // ── Rays from the hexagram tips — TONE sets the colour ────────────────────
+    if (blend > 0.005f)
     {
-        const float innerAlpha = 0.60f + blend * 0.40f;
+        drawHexRays (g, centre.x, centre.y, outerR * 0.95f, rayEnd, rotRad,
+                     toneColour.withAlpha (blend * 0.18f), 4.5f);
+        drawHexRays (g, centre.x, centre.y, outerR * 0.95f, rayEnd, rotRad,
+                     toneColour.withAlpha (blend * 0.65f), 1.0f);
+    }
+
+    // ── Hexagram overlay — wakes over the painted star as blend rises ────────
+    {
+        const float alpha = 0.06f + breathe * 0.05f + blend * 0.80f;
+
+        if (blend > 0.01f)
+        {
+            const juce::Colour fillCol = juce::Colour (0xffcc7700).withAlpha (blend * 0.16f);
+            drawHexagram (g, centre.x, centre.y, outerR, innerR, rotRad,
+                          juce::Colours::transparentBlack, 0, fillCol);
+        }
+
+        drawHexagram (g, centre.x, centre.y, outerR, innerR, rotRad,
+                      toneColour.withAlpha (alpha * 0.22f), 4.5f);
+        drawHexagram (g, centre.x, centre.y, outerR, innerR, rotRad,
+                      toneColour.withAlpha (juce::jmin (1.f, alpha)), 1.3f);
+    }
+
+    // ── Inner 4-pointed star (counter-rotating) ───────────────────────────────
+    if (blend > 0.01f)
+    {
+        const float innerAlpha = blend * 0.9f;
         const float negRot = -rotRad * 0.6f;
         const float step4  = juce::MathConstants<float>::twoPi / 4.f;
         juce::Path star4;
@@ -330,24 +336,23 @@ void ThresholdDisplay::paint (juce::Graphics& g)
         }
         star4.closeSubPath();
 
-        // Glow
         g.setColour (LiminalLookAndFeel::GOLD.withAlpha (innerAlpha * 0.35f));
         g.strokePath (star4, juce::PathStrokeType (4.5f));
-        // Core
         g.setColour (juce::Colour (0xfffce8a0).withAlpha (innerAlpha));
         g.strokePath (star4, juce::PathStrokeType (1.2f));
     }
 
-    // ── Center bright point ────────────────────────────────────────────────────
+    // ── Centre bright point — pulses with breathe + blend ────────────────────
     {
-        const float dotR = coreR * 0.20f;
-        juce::ColourGradient cg (juce::Colour (0xfffce8a0).withAlpha (0.92f),
+        const float dotA = 0.18f + breathe * 0.12f + blend * 0.70f;
+        const float dotR = 2.f + blend * 2.5f;
+        juce::ColourGradient cg (juce::Colour (0xfffce8a0).withAlpha (dotA),
                                   centre.x, centre.y,
                                   juce::Colour (0x00ffe880),
-                                  centre.x + coreR * 0.5f, centre.y, true);
+                                  centre.x + 10.f + blend * 8.f, centre.y, true);
         g.setGradientFill (cg);
-        g.fillEllipse (centre.x - coreR * 0.5f, centre.y - coreR * 0.5f, coreR, coreR);
-        g.setColour (juce::Colours::white.withAlpha (0.97f));
+        g.fillEllipse (centre.x - 12.f, centre.y - 12.f, 24.f, 24.f);
+        g.setColour (juce::Colours::white.withAlpha (juce::jmin (1.f, dotA)));
         g.fillEllipse (centre.x - dotR, centre.y - dotR, dotR * 2.f, dotR * 2.f);
     }
 
@@ -394,7 +399,6 @@ void ThresholdDisplay::drawEngineAxes (juce::Graphics& g,
             const float angle = rotRad - juce::MathConstants<float>::halfPi + ptIdx * step;
             const juce::Point<float> tip { centre.x + outerR * std::cos (angle),
                                            centre.y + outerR * std::sin (angle) };
-            // Shorter extension: 1.45× instead of 1.80× so rays don't overwhelm
             const juce::Point<float> ext { centre.x + outerR * 1.45f * std::cos (angle),
                                            centre.y + outerR * 1.45f * std::sin (angle) };
             g.setColour (engineColors[eng].withAlpha (pulseAlpha * 0.18f));

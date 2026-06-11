@@ -5,8 +5,13 @@
 
 #include "KnobComponent.h"
 
-// One sub-panel for a single engine (HAUNT VERB / SHIMMER / PITCH GHOST).
-// Holds the engine knob(s) and an activity indicator glyph.
+// Overlay for one engine panel (HAUNT VERB / SHIMMER / PITCH GHOST).
+//
+// The panel frame, label and ornaments are painted in the background
+// artwork; this component sits exactly over a painted panel and contributes
+// only the live parts: the real knob, an activation glow wash, and a glowing
+// glyph pulse over the painted icon. The Shimmer panel also hosts the
+// interval selector.
 class EnginePanel : public juce::Component
 {
 public:
@@ -18,16 +23,21 @@ public:
     void paint   (juce::Graphics& g) override;
     void resized () override;
 
-    void setActive (bool isActive);
+    void setActive    (bool isActive);
+    void setGlowLevel (float blend);   // 0–1, engine blend from the processor
 
 private:
-    void drawHauntGlyph    (juce::Graphics& g, juce::Rectangle<float> area) const;
-    void drawShimmerGlyph  (juce::Graphics& g, juce::Rectangle<float> area) const;
-    void drawGhostGlyph    (juce::Graphics& g, juce::Rectangle<float> area) const;
+    void drawHauntGlyph    (juce::Graphics& g, float cx, float cy, float r) const;
+    void drawShimmerGlyph  (juce::Graphics& g, float cx, float cy, float r) const;
+    void drawGhostGlyph    (juce::Graphics& g, float cx, float cy, float r) const;
+
+    // Knob centre within this panel, measured from the painted artwork
+    juce::Point<int> knobCentreInPanel() const;
 
     Engine engineType;
-    bool   active       = false;
+    bool   active        = false;
     float  glowIntensity = 0.f;  // 0–1, smoothly tracks active state
+    float  blendLevel    = 0.f;
 
     std::unique_ptr<KnobComponent> primaryKnob;
 

@@ -3,8 +3,16 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <juce_audio_processors/juce_audio_processors.h>
 
-// Celestial threshold display — compass rose star that breathes with blend,
-// pulses per-engine, and flashes when the threshold is crossed.
+// Celestial threshold display.
+//
+// The star itself is part of the background artwork; this component sits
+// exactly over it and draws only ADDITIVE, animated light: breathing glow,
+// a bright hexagram that wakes with the blend level, rotating compass ticks,
+// per-engine ray pulses, threshold/envelope rings and crossing ripples.
+// At blend = 0 it is almost invisible so the painted card shows through.
+//
+// The gold threshold ring is interactive: click/drag radially to set the
+// threshold parameter (wired up by the editor via the callbacks below).
 class ThresholdDisplay : public juce::Component,
                          private juce::Timer
 {
@@ -14,6 +22,10 @@ public:
 
     void paint (juce::Graphics& g) override;
     void resized() override;
+
+    void mouseDown (const juce::MouseEvent& e) override;
+    void mouseDrag (const juce::MouseEvent& e) override;
+    void mouseUp   (const juce::MouseEvent& e) override;
 
     // Called from the UI thread (timer) to update display data
     void setBlendLevel    (float blend);
@@ -29,11 +41,19 @@ public:
     void setShimmerActive   (bool active);
     void setPitchGhostActive(bool active);
 
+    // Threshold ring drag → parameter gesture (wired by PluginEditor)
+    std::function<void()>      onThresholdDragStart;
+    std::function<void(float)> onThresholdDrag;       // normalized 0–1
+    std::function<void()>      onThresholdDragEnd;
+
 private:
     void timerCallback() override;
 
     void drawEngineAxes (juce::Graphics& g, juce::Point<float> centre,
                          float outerR, float blend, float rotRad);
+
+    float radiusToThreshold (float radius) const;
+    static float thresholdToRadius (float threshold);
 
     // Audio-thread → UI-thread atomics
     std::atomic<float> blendLevel    { 0.f };
@@ -58,8 +78,11 @@ private:
 
     float rotationSpeed  = 0.10f;  // degrees/frame — driven by SLEW
     float starRotation   = 0.f;    // degrees, slow drift
+    float breathePhase   = 0.f;    // idle breathing oscillator
     float flashIntensity = 0.f;    // 0–1, decays each frame
     float rippleRadius   = 0.f;    // px, expands on threshold crossing
     bool  rippleActive   = false;
     float prevEnvelope   = 1.f;    // crossing detection
+
+    bool  draggingThreshold = false;
 };

@@ -22,18 +22,17 @@ public:
 private:
     void timerCallback() override;
 
-    void drawFiligreeBorder         (juce::Graphics& g);
-    void drawCelestialDecorations   (juce::Graphics& g);
-    void drawCornerMedallion        (juce::Graphics& g, float cx, float cy, float r);
-    static void draw4PointStar      (juce::Graphics& g, float cx, float cy, float r);
-    static void drawCrescent        (juce::Graphics& g, float cx, float cy, float r);
-
     PluginProcessor& processorRef;
 
     LiminalLookAndFeel lookAndFeel;
 
+    // Reference artwork drawn 1:1 as the full background. All control
+    // positions in resized() are measured against this image.
+    juce::Image backgroundImage;
+
     // Central display
     ThresholdDisplay thresholdDisplay;
+    std::unique_ptr<juce::ParameterAttachment> thresholdDragAttachment;
 
     // Five main knobs (top row)
     KnobComponent knobThreshold, knobSlew, knobDepth, knobTone, knobMix;
@@ -57,6 +56,10 @@ private:
     // APVTS attachments (must outlive widgets)
     juce::AudioProcessorValueTreeState::ButtonAttachment invertAttachment;
     juce::AudioProcessorValueTreeState::ButtonAttachment latchAttachment;
+
+    // Border flash when the envelope crosses below the threshold
+    float borderFlash  = 0.f;
+    float prevEnvelope = 1.f;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PluginEditor)
 };
