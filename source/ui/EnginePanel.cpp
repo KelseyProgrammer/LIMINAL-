@@ -28,6 +28,15 @@ EnginePanel::EnginePanel (Engine engine,
         case Engine::PitchGhost:
             primaryKnob = std::make_unique<KnobComponent> ("possession", "POSSESSION", apvts, false);
             addAndMakeVisible (*primaryKnob);
+
+            driftKnob = std::make_unique<KnobComponent> ("driftRate", "DRIFT", apvts, false);
+            addAndMakeVisible (*driftKnob);
+
+            driftDirBox = std::make_unique<juce::ComboBox>();
+            driftDirBox->addItemList ({ "Down", "Wander", "Up" }, 1);
+            addAndMakeVisible (*driftDirBox);
+            driftDirAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (
+                apvts, "driftDir", *driftDirBox);
             break;
     }
 }
@@ -37,8 +46,14 @@ void EnginePanel::setActive (bool isActive)
     active = isActive;
     // Smooth glow transition: ~15% per call at 30fps ≈ 0.5s fade
     const float target = isActive ? 1.f : 0.f;
-    glowIntensity = glowIntensity + (target - glowIntensity) * 0.15f;
-    repaint();
+    const float next   = glowIntensity + (target - glowIntensity) * 0.15f;
+
+    // Only repaint while the glow is actually moving or alive — idle panels
+    // are pure background and repainting them costs a full image blit
+    if (std::abs (next - glowIntensity) > 0.001f || next > 0.005f)
+        repaint();
+
+    glowIntensity = next;
 }
 
 void EnginePanel::setGlowLevel (float blend)
@@ -69,6 +84,13 @@ void EnginePanel::resized()
     // Interval selector tucked into the lower-right of the Shimmer panel
     if (intervalBox)
         intervalBox->setBounds (getWidth() - 86, getHeight() - 28, 76, 20);
+
+    // Drift controls in the PitchGhost panel: small rate knob upper-left,
+    // direction selector lower-left
+    if (driftKnob)
+        driftKnob->setBounds (40, 30, 30, 30);
+    if (driftDirBox)
+        driftDirBox->setBounds (12, getHeight() - 28, 80, 20);
 }
 
 void EnginePanel::paint (juce::Graphics& g)

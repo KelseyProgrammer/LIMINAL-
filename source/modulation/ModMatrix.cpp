@@ -57,5 +57,6 @@ void ModMatrix::process (float envelopeValue)
 
 void ModMatrix::setLFORate (float rateHz)
 {
-    lfo.setFrequency (std::max (0.01f, rateHz));
+    currentLFORate = std::max (0.01f, rateHz);
+    lfo.setFrequency (currentLFORate);
 }

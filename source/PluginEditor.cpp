@@ -1,9 +1,8 @@
 #include "PluginEditor.h"
 
-// The editor is a fixed 950x668 canvas: the reference artwork is drawn 1:1 as
-// the background, and every interactive control is positioned exactly over its
-// painted counterpart in the image. Coordinates below are pixel measurements
-// taken from assets/images/liminal_bg.png.
+// All control positions are pixel measurements against the 950x668 background
+// artwork (assets/images/liminal_bg.png). The content component keeps that
+// fixed coordinate space; the editor scales it to the window.
 
 PluginEditor::PluginEditor (PluginProcessor& p)
     : AudioProcessorEditor (&p),
@@ -22,15 +21,20 @@ PluginEditor::PluginEditor (PluginProcessor& p)
       knobLfoToCrystallize   ("lfoToCrystallize", "LFO>CRYST",   p.apvts, false),
       knobEnvToDepth         ("envToDepth",       "ENV>DEPTH",   p.apvts, false),
       knobRampTime           ("rampTime",         "TIME",        p.apvts, false),
-      invertAttachment (p.apvts, "invertMode",  invertButton),
-      latchAttachment  (p.apvts, "latch",       latchButton)
+      invertAttachment    (p.apvts, "invertMode", invertButton),
+      latchAttachment     (p.apvts, "latch",      latchButton),
+      autoRampAttachment  (p.apvts, "autoRamp",   autoRampButton),
+      sidechainAttachment (p.apvts, "sidechain",  sidechainButton)
 {
     setLookAndFeel (&lookAndFeel);
 
     backgroundImage = juce::ImageCache::getFromMemory (BinaryData::liminal_bg_png,
                                                        BinaryData::liminal_bg_pngSize);
 
-    addAndMakeVisible (thresholdDisplay);
+    addAndMakeVisible (content);
+    content.setBounds (0, 0, kContentW, kContentH);
+
+    content.addAndMakeVisible (thresholdDisplay);
 
     // Dragging the gold ring in the display writes back to the threshold param
     if (auto* thresholdParam = p.apvts.getParameter ("threshold"))
@@ -44,27 +48,38 @@ PluginEditor::PluginEditor (PluginProcessor& p)
         thresholdDisplay.onThresholdDragEnd   = [this] { thresholdDragAttachment->endGesture(); };
     }
 
-    addAndMakeVisible (knobThreshold);
-    addAndMakeVisible (knobSlew);
-    addAndMakeVisible (knobDepth);
-    addAndMakeVisible (knobTone);
-    addAndMakeVisible (knobMix);
-    addAndMakeVisible (invertButton);
+    content.addAndMakeVisible (knobThreshold);
+    content.addAndMakeVisible (knobSlew);
+    content.addAndMakeVisible (knobDepth);
+    content.addAndMakeVisible (knobTone);
+    content.addAndMakeVisible (knobMix);
+    content.addAndMakeVisible (invertButton);
+    content.addAndMakeVisible (sidechainButton);
 
-    addAndMakeVisible (hauntPanel);
-    addAndMakeVisible (shimmerPanel);
-    addAndMakeVisible (ghostPanel);
+    content.addAndMakeVisible (hauntPanel);
+    content.addAndMakeVisible (shimmerPanel);
+    content.addAndMakeVisible (ghostPanel);
 
-    addAndMakeVisible (knobLfoRate);
-    addAndMakeVisible (knobLfoToDepth);
-    addAndMakeVisible (knobLfoToHaunt);
-    addAndMakeVisible (knobLfoToCrystallize);
-    addAndMakeVisible (knobEnvToDepth);
+    content.addAndMakeVisible (knobLfoRate);
+    content.addAndMakeVisible (knobLfoToDepth);
+    content.addAndMakeVisible (knobLfoToHaunt);
+    content.addAndMakeVisible (knobLfoToCrystallize);
+    content.addAndMakeVisible (knobEnvToDepth);
+
+    lfoSyncBox.addItemList ({ "Free", "1/1", "1/2", "1/4", "1/8", "1/16" }, 1);
+    content.addAndMakeVisible (lfoSyncBox);
+    lfoSyncAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (
+        p.apvts, "lfoSync", lfoSyncBox);
+
+    rampSyncBox.addItemList ({ "Free", "1 Bar", "2 Bars", "4 Bars", "8 Bars" }, 1);
+    content.addAndMakeVisible (rampSyncBox);
+    rampSyncAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (
+        p.apvts, "rampSync", rampSyncBox);
 
     rampAButton.onClick = [this] { processorRef.captureSnapshotA(); };
     rampBButton.onClick = [this] { processorRef.captureSnapshotB(); };
-    addAndMakeVisible (rampAButton);
-    addAndMakeVisible (rampBButton);
+    content.addAndMakeVisible (rampAButton);
+    content.addAndMakeVisible (rampBButton);
 
     rampSlider.setSliderStyle (juce::Slider::LinearHorizontal);
     rampSlider.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
@@ -72,13 +87,27 @@ PluginEditor::PluginEditor (PluginProcessor& p)
     rampSlider.onValueChange = [this] {
         processorRef.rampPosition.store (static_cast<float> (rampSlider.getValue()));
     };
-    addAndMakeVisible (rampSlider);
+    content.addAndMakeVisible (rampSlider);
 
     latchButton.onClick = [this] { processorRef.triggerRamp(); };
-    addAndMakeVisible (latchButton);
-    addAndMakeVisible (knobRampTime);
+    content.addAndMakeVisible (latchButton);
+    content.addAndMakeVisible (autoRampButton);
+    content.addAndMakeVisible (knobRampTime);
 
-    setSize (950, 668);
+    layoutContent();
+
+    // Resizable with locked aspect ratio; restore the saved scale
+    setResizable (true, true);
+    if (auto* constrainer = getConstrainer())
+    {
+        constrainer->setFixedAspectRatio (static_cast<double> (kContentW) / kContentH);
+        constrainer->setSizeLimits (kContentW / 2, kContentH / 2, kContentW * 2, kContentH * 2);
+    }
+
+    const double savedScale = processorRef.apvts.state.getProperty ("uiScale", 1.0);
+    setSize (juce::roundToInt (kContentW * savedScale),
+             juce::roundToInt (kContentH * savedScale));
+
     startTimerHz (30);
 }
 
@@ -137,25 +166,38 @@ void PluginEditor::timerCallback()
     if (borderFlash > 0.f)
     {
         borderFlash = std::max (0.f, borderFlash - 0.06f);
-        repaint();
+        content.repaint();
     }
 }
 
 void PluginEditor::paint (juce::Graphics& g)
 {
     g.fillAll (juce::Colour (0xff060a1c));
-
-    if (backgroundImage.isValid())
-        g.drawImage (backgroundImage, getLocalBounds().toFloat());
 }
 
-void PluginEditor::paintOverChildren (juce::Graphics& g)
+void PluginEditor::resized()
 {
-    // Gold bloom along the filigree frame when the threshold is crossed —
-    // the whole card briefly "catches the light", then settles.
+    const float scale = static_cast<float> (getWidth()) / static_cast<float> (kContentW);
+    content.setTransform (juce::AffineTransform::scale (scale));
+
+    processorRef.apvts.state.setProperty ("uiScale", static_cast<double> (scale), nullptr);
+}
+
+void PluginEditor::paintContent (juce::Graphics& g)
+{
+    if (backgroundImage.isValid())
+        g.drawImage (backgroundImage,
+                     juce::Rectangle<float> (0.f, 0.f, static_cast<float> (kContentW),
+                                             static_cast<float> (kContentH)));
+}
+
+void PluginEditor::paintContentOver (juce::Graphics& g)
+{
+    // Gold bloom along the filigree frame when the threshold is crossed
     if (borderFlash > 0.01f)
     {
-        const auto frame = getLocalBounds().toFloat().reduced (7.f);
+        const auto frame = juce::Rectangle<float> (0.f, 0.f, static_cast<float> (kContentW),
+                                                   static_cast<float> (kContentH)).reduced (7.f);
         g.setColour (LiminalLookAndFeel::GOLD.withAlpha (borderFlash * 0.45f));
         g.drawRoundedRectangle (frame, 10.f, 3.5f);
         g.setColour (juce::Colour (0xffffe8a0).withAlpha (borderFlash * 0.30f));
@@ -163,7 +205,7 @@ void PluginEditor::paintOverChildren (juce::Graphics& g)
     }
 }
 
-void PluginEditor::resized()
+void PluginEditor::layoutContent()
 {
     // Central star display — centred on the painted star at (477, 130)
     thresholdDisplay.setBounds (297, 20, 360, 220);
@@ -178,7 +220,8 @@ void PluginEditor::resized()
     knobTone     .setBounds (centred (629, 302, 56));
     knobMix      .setBounds (centred (803, 302, 56));
 
-    invertButton.setBounds (897, 294, 32, 32);
+    invertButton   .setBounds (897, 294, 32, 32);
+    sidechainButton.setBounds (897, 330, 32, 18);
 
     // Engine panels — painted panel frames with knobs at y=401
     hauntPanel  .setBounds ( 10, 355, 296, 100);
@@ -192,10 +235,16 @@ void PluginEditor::resized()
     knobLfoToCrystallize .setBounds (centred (656, 526, 44));
     knobEnvToDepth       .setBounds (centred (841, 526, 44));
 
+    lfoSyncBox.setBounds (75, 562, 60, 17);
+
     // Ramp strip — painted track runs y≈615, A/B capsules flank it
     rampAButton.setBounds (45,  604, 26, 22);
     rampSlider .setBounds (70,  602, 702, 26);
     rampBButton.setBounds (771, 604, 28, 23);
     latchButton.setBounds (803, 602, 57, 24);
+
+    rampSyncBox   .setBounds (698, 575, 64, 19);
+    autoRampButton.setBounds (803, 576, 57, 18);
+
     knobRampTime.setBounds (centred (898, 604, 42));
 }

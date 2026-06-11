@@ -10,86 +10,92 @@ void PitchGhost::prepare (const juce::dsp::ProcessSpec& spec)
     ringBuffer.clear();
     ringWritePos = 0;
 
-    captureBuffer.setSize (static_cast<int> (spec.numChannels), kMaxCaptureSamples);
-    captureBuffer.clear();
+    for (auto& g : ghosts)
+    {
+        g.capture.setSize (static_cast<int> (spec.numChannels), kMaxCaptureSamples);
+        g.capture.clear();
+        g.length       = 0;
+        g.readPos      = 0.f;
+        g.active       = false;
+        g.currentCents = 0.f;
+        g.targetCents  = 0.f;
+        g.driftTimer   = 0.f;
+        g.fadeInEnv    = 0.f;
+        g.decayEnv     = 0.f;
+    }
+    nextGhost = 0;
 
-    setGhostDecay (800.f);   // 800 ms default decay
-
-    ghostActive         = false;
-    currentPitchCents   = 0.f;
-    targetPitchCents    = 0.f;
-    driftTimer          = 0.f;
-    decayEnvelope       = 0.f;
-    fadeInEnv           = 0.f;
-    captureReadPos      = 0.f;
+    setGhostDecay (1400.f);   // generous default so the choir overlaps
 }
 
-void PitchGhost::process (juce::AudioBuffer<float>& buffer, float blendFactor)
+void PitchGhost::renderWet (juce::AudioBuffer<float>& wet, float blendFactor)
 {
-    if (!ghostActive || blendFactor <= 0.f)
+    if (blendFactor <= 0.f)
+    {
+        // Ghosts die quietly when the engines sleep mid-phrase
         return;
+    }
 
-    const int numSamples  = buffer.getNumSamples();
-    const int numChannels = std::min (buffer.getNumChannels(),
-                                      captureBuffer.getNumChannels());
-
+    const int numSamples = wet.getNumSamples();
     const float dt = 1.f / static_cast<float> (sampleRate);
 
-    for (int s = 0; s < numSamples; ++s)
+    for (auto& g : ghosts)
     {
-        // Fade-in envelope (avoids click on capture start)
-        if (fadeInEnv < 1.f)
-            fadeInEnv = std::min (1.f, fadeInEnv + 1.f / kFadeInSamples);
+        if (! g.active)
+            continue;
 
-        // Decay envelope
-        decayEnvelope *= decayCoeff;
+        const int numChannels = juce::jmin (wet.getNumChannels(),
+                                            g.capture.getNumChannels());
 
-        // Update pitch drift
-        updateDrift (dt);
-        const float ratio = pitchToRatio (currentPitchCents);
-
-        if (decayEnvelope < 1e-5f)
+        for (int s = 0; s < numSamples; ++s)
         {
-            ghostActive = false;
-            break;
+            if (g.fadeInEnv < 1.f)
+                g.fadeInEnv = juce::jmin (1.f, g.fadeInEnv + 1.f / kFadeInSamples);
+
+            g.decayEnv *= decayCoeff;
+            if (g.decayEnv < 1e-5f)
+            {
+                g.active = false;
+                break;
+            }
+
+            updateDrift (g, dt);
+            const float ratio = pitchToRatio (g.currentCents);
+
+            const float env = g.decayEnv * g.fadeInEnv * blendFactor * 0.8f;
+
+            // Crossfade window near loop boundaries to prevent wrap clicks
+            const float fadeZone  = juce::jmin (256.f, static_cast<float> (g.length) * 0.05f);
+            const float distToEnd = static_cast<float> (g.length) - g.readPos;
+            const float loopGain  = juce::jmin (1.f,
+                                     juce::jmin (g.readPos, distToEnd) / fadeZone);
+
+            for (int ch = 0; ch < numChannels; ++ch)
+            {
+                const int   i0   = static_cast<int> (g.readPos) % g.length;
+                const int   i1   = (i0 + 1) % g.length;
+                const float frac = g.readPos - std::floor (g.readPos);
+
+                const auto* cap = g.capture.getReadPointer (ch);
+                const float ghostSample = cap[i0] * (1.f - frac) + cap[i1] * frac;
+
+                wet.getWritePointer (ch)[s] += ghostSample * env * loopGain;
+            }
+
+            g.readPos = std::fmod (g.readPos + ratio, static_cast<float> (g.length));
         }
-
-        const float env = decayEnvelope * fadeInEnv * blendFactor;
-
-        // Crossfade window near loop boundaries to prevent clicks on wrap-around.
-        // Fade in over the first 256 samples, fade out over the last 256 samples.
-        const float fadeZone   = juce::jmin (256.f, static_cast<float> (captureLength) * 0.05f);
-        const float distToEnd  = static_cast<float> (captureLength) - captureReadPos;
-        const float loopGain   = juce::jmin (1.f,
-                                  juce::jmin (captureReadPos, distToEnd) / fadeZone);
-
-        for (int ch = 0; ch < numChannels; ++ch)
-        {
-            // Linear interpolation from capture buffer (looping)
-            const float fIdx  = captureReadPos;
-            const int   iIdx  = static_cast<int> (fIdx) % captureLength;
-            const int   iIdx1 = (iIdx + 1) % captureLength;
-            const float frac  = fIdx - static_cast<float> (static_cast<int> (fIdx));
-
-            const auto* cap = captureBuffer.getReadPointer (ch);
-            const float ghostSample = cap[iIdx] * (1.f - frac) + cap[iIdx1] * frac;
-
-            buffer.getWritePointer (ch)[s] += ghostSample * env * loopGain;
-        }
-
-        captureReadPos = std::fmod (captureReadPos + ratio, static_cast<float> (captureLength));
     }
 }
 
 void PitchGhost::pushAudio (const juce::AudioBuffer<float>& buffer)
 {
     const int numSamples  = buffer.getNumSamples();
-    const int numChannels = std::min (buffer.getNumChannels(),
-                                      ringBuffer.getNumChannels());
+    const int numChannels = juce::jmin (buffer.getNumChannels(),
+                                        ringBuffer.getNumChannels());
 
     for (int s = 0; s < numSamples; ++s)
     {
-        const int pos = ringWritePos & (kRingSize - 1);   // fast power-of-2 modulo
+        const int pos = ringWritePos & (kRingSize - 1);
         for (int ch = 0; ch < numChannels; ++ch)
             ringBuffer.getWritePointer (ch)[pos] = buffer.getReadPointer (ch)[s];
         ringWritePos = (ringWritePos + 1) & (kRingSize - 1);
@@ -98,33 +104,33 @@ void PitchGhost::pushAudio (const juce::AudioBuffer<float>& buffer)
 
 void PitchGhost::triggerCapture()
 {
-    // Capture the last 250ms worth of audio from the ring buffer
-    captureLength = std::min (kMaxCaptureSamples,
-                              static_cast<int> (sampleRate * 0.25));
-    captureLength = std::max (captureLength, 1);   // safety
+    Ghost& g = ghosts[nextGhost];
+    nextGhost = (nextGhost + 1) % kNumGhosts;
 
-    const int numCh  = std::min (ringBuffer.getNumChannels(),
-                                 captureBuffer.getNumChannels());
+    g.length = juce::jmax (1, juce::jmin (kMaxCaptureSamples,
+                                          static_cast<int> (sampleRate * 0.25)));
 
-    // Copy backwards from ring write head (the most recent audio)
-    const int startPos = (ringWritePos - captureLength + kRingSize) & (kRingSize - 1);
+    const int numCh = juce::jmin (ringBuffer.getNumChannels(),
+                                  g.capture.getNumChannels());
+
+    // Copy backwards from the ring write head (the most recent audio)
+    const int startPos = (ringWritePos - g.length + kRingSize) & (kRingSize - 1);
 
     for (int ch = 0; ch < numCh; ++ch)
     {
         const auto* src = ringBuffer.getReadPointer (ch);
-        auto*       dst = captureBuffer.getWritePointer (ch);
-
-        for (int i = 0; i < captureLength; ++i)
+        auto*       dst = g.capture.getWritePointer (ch);
+        for (int i = 0; i < g.length; ++i)
             dst[i] = src[(startPos + i) & (kRingSize - 1)];
     }
 
-    captureReadPos    = 0.f;
-    decayEnvelope     = 1.f;
-    fadeInEnv         = 0.f;
-    currentPitchCents = 0.f;
-    targetPitchCents  = 0.f;
-    driftTimer        = 0.f;
-    ghostActive       = true;
+    g.readPos      = 0.f;
+    g.decayEnv     = 1.f;
+    g.fadeInEnv    = 0.f;
+    g.currentCents = 0.f;
+    g.targetCents  = 0.f;
+    g.driftTimer   = 0.f;
+    g.active       = true;
 }
 
 void PitchGhost::setPossession (float amount)
@@ -134,7 +140,7 @@ void PitchGhost::setPossession (float amount)
 
 void PitchGhost::setDriftRate (float rateHz)
 {
-    driftRate = std::max (0.001f, rateHz);
+    driftRate = juce::jmax (0.01f, rateHz);
 }
 
 void PitchGhost::setDriftDirection (int direction)
@@ -153,32 +159,30 @@ void PitchGhost::setGhostDecay (float decayMs)
         std::exp (-1.0 / (sampleRate * static_cast<double> (decayMs) / 1000.0)));
 }
 
-void PitchGhost::updateDrift (float deltaTime)
+void PitchGhost::updateDrift (Ghost& g, float deltaTime)
 {
-    driftTimer += deltaTime;
+    g.driftTimer += deltaTime;
 
-    if (driftTimer >= (1.f / driftRate))
+    if (g.driftTimer >= (1.f / driftRate))
     {
-        driftTimer = 0.f;
+        g.driftTimer = 0.f;
 
-        // Max drift range: low possession → wide drift, high possession → narrow
-        const float maxDrift = (1.f - possession) * 50.f;  // up to ±50 cents
+        // Drift range: possession 1 → ±12 cents (tight double),
+        // possession 0 → ±1200 cents (a full octave of wandering)
+        const float t        = 1.f - possession;
+        const float maxDrift = 12.f + t * t * 1188.f;
 
         if (driftDir == 0)
-        {
-            // Wander: pick new random target
-            targetPitchCents = (rng.nextFloat() * 2.f - 1.f) * maxDrift;
-        }
+            g.targetCents = (rng.nextFloat() * 2.f - 1.f) * maxDrift;
         else
-        {
-            // Directional drift
-            targetPitchCents = static_cast<float> (driftDir) * maxDrift;
-        }
+            g.targetCents = static_cast<float> (driftDir) * maxDrift
+                            * (0.4f + 0.6f * rng.nextFloat());
     }
 
-    // Smooth drift toward target (fast enough to be musical)
-    const float driftSmooth = 0.01f;
-    currentPitchCents += (targetPitchCents - currentPitchCents) * driftSmooth;
+    // Smooth glide toward the target; slower for wide drifts so big pitch
+    // excursions sound like a slide, not a jump
+    const float driftSmooth = 0.002f;
+    g.currentCents += (g.targetCents - g.currentCents) * driftSmooth;
 }
 
 float PitchGhost::pitchToRatio (float cents) const

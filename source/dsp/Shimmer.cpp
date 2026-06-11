@@ -44,9 +44,7 @@ float PitchShifterVoice::processSample (float input, int /*channel*/)
     const float g1 = readInterp (readPos);
     const float g2 = readInterp (readPos2);
 
-    // Distance-based Hann windows — sum to 1 everywhere (50% overlap property).
-    // dist = how far the read head is BEHIND the write head.
-    // When dist occupies [0, kGrainSamples], phase sweeps 0→1, giving the full window shape.
+    // Distance-based Hann windows — sum to 1 everywhere (50% overlap property)
     auto computeWindow = [&](float rp) -> float
     {
         const float dist  = std::fmod (static_cast<float> (writePos) - rp + fBufLen, fBufLen);
@@ -68,6 +66,11 @@ float PitchShifterVoice::processSample (float input, int /*channel*/)
 // Shimmer
 //==============================================================================
 
+static constexpr float kCascadeDelayMs   = 340.f;
+static constexpr float kCascadeDampLP    = 0.30f;   // LP in the feedback path
+static constexpr float kFreezeTriggerLvl = 0.08f;   // crystallize level that latches
+static constexpr float kDetuneCents      = 3.f;     // L/R width detune
+
 void Shimmer::prepare (const juce::dsp::ProcessSpec& spec)
 {
     sampleRate = spec.sampleRate;
@@ -76,69 +79,148 @@ void Shimmer::prepare (const juce::dsp::ProcessSpec& spec)
     {
         voice1[ch].prepare (spec);
         voice2[ch].prepare (spec);
+        cascadeDamp[ch] = 0.f;
+        lpState[ch]     = 0.f;
     }
 
-    feedbackBuffer.setSize (static_cast<int> (spec.numChannels),
-                            static_cast<int> (spec.maximumBlockSize));
-    feedbackBuffer.clear();
+    const int cascadeSamples = static_cast<int> (
+        std::ceil (kCascadeDelayMs / 1000.0 * sampleRate)) + 2;
+    cascadeDelay.prepare (spec);
+    cascadeDelay.setMaximumDelayInSamples (cascadeSamples);
+    cascadeDelay.setDelay (static_cast<float> (kCascadeDelayMs / 1000.0 * sampleRate));
 
-    frozenBuffer.setSize (static_cast<int> (spec.numChannels),
-                          static_cast<int> (spec.maximumBlockSize));
-    frozenBuffer.clear();
+    freezeRing.setSize (2, kFreezeRingSize);
+    freezeRing.clear();
+    freezeWritePos = 0;
+
+    frozenLoop.setSize (2, kFreezeRingSize);
+    frozenLoop.clear();
+    frozenLength  = 0;
+    frozenReadPos = 0.f;
+    frozenEnv     = 0.f;
+    frozenActive  = false;
 
     setInterval (intervalSemitones);
 }
 
-void Shimmer::process (juce::AudioBuffer<float>& buffer, float blendFactor)
+void Shimmer::captureFreeze()
 {
-    if (blendFactor <= 0.f && crystallizeAmount <= 0.f)
+    // Latch the most recent ~2s of shimmer output from the ring
+    frozenLength = juce::jmin (kFreezeRingSize,
+                               static_cast<int> (sampleRate * 2.0));
+    const int startPos = (freezeWritePos - frozenLength + kFreezeRingSize)
+                         & (kFreezeRingSize - 1);
+
+    for (int ch = 0; ch < 2; ++ch)
+    {
+        const auto* src = freezeRing.getReadPointer (ch);
+        auto*       dst = frozenLoop.getWritePointer (ch);
+        for (int i = 0; i < frozenLength; ++i)
+            dst[i] = src[(startPos + i) & (kFreezeRingSize - 1)];
+    }
+
+    frozenReadPos = 0.f;
+    frozenEnv     = 1.f;
+    frozenActive  = true;
+}
+
+void Shimmer::renderWet (const juce::AudioBuffer<float>& in,
+                         juce::AudioBuffer<float>& wet,
+                         float blendFactor)
+{
+    const int numSamples  = in.getNumSamples();
+    const int numChannels = juce::jmin (in.getNumChannels(), wet.getNumChannels(), 2);
+
+    wet.clear();
+
+    // Freeze latches when crystallize rises past the trigger level
+    if (crystallizeAmount >= kFreezeTriggerLvl && prevCrystallize < kFreezeTriggerLvl)
+        captureFreeze();
+    if (crystallizeAmount < kFreezeTriggerLvl * 0.5f)
+        frozenActive = false;
+    prevCrystallize = crystallizeAmount;
+
+    const bool liveActive = blendFactor > 0.f;
+    if (! liveActive && ! frozenActive)
         return;
 
-    const int numSamples  = buffer.getNumSamples();
-    const int numChannels = std::min (buffer.getNumChannels(), 2);
-
-    // Decide whether to latch (freeze) shimmer output
-    const bool shouldFreeze = (crystallizeAmount > 0.9f);
-
-    for (int ch = 0; ch < numChannels; ++ch)
+    // Frozen layer decay: 1.0 = infinite hold, below = decays over 0.5–8.5s
+    float frozenDecayCoeff = 1.f;
+    if (crystallizeAmount < 0.999f)
     {
-        auto* wet  = buffer.getWritePointer (ch);
-        auto* fb   = feedbackBuffer.getWritePointer (ch);
-        auto* frz  = frozenBuffer.getWritePointer (ch);
+        const double decaySeconds = 0.5 + 8.0 * crystallizeAmount;
+        frozenDecayCoeff = static_cast<float> (
+            std::exp (-1.0 / (sampleRate * decaySeconds)));
+    }
 
-        for (int s = 0; s < numSamples; ++s)
+    for (int s = 0; s < numSamples; ++s)
+    {
+        // ── Frozen loop sample (advance once per frame, shared across channels) ──
+        float frozenL = 0.f, frozenR = 0.f;
+        if (frozenActive && frozenLength > 256)
         {
-            const float dryIn = wet[s];
+            // Boundary crossfade window (same trick as PitchGhost loop)
+            const float fadeZone  = juce::jmin (1024.f, frozenLength * 0.05f);
+            const float distToEnd = static_cast<float> (frozenLength) - frozenReadPos;
+            const float loopGain  = juce::jmin (1.f,
+                                     juce::jmin (frozenReadPos, distToEnd) / fadeZone);
 
-            // Input to pitch shifters = dry + gentle feedback
-            const float shifterIn = dryIn + fb[s] * feedbackLevel;
+            const int   i0   = static_cast<int> (frozenReadPos) % frozenLength;
+            const int   i1   = (i0 + 1) % frozenLength;
+            const float frac = frozenReadPos - std::floor (frozenReadPos);
 
-            // Voice 1: user interval. Voice 2: a fifth (7st) above voice 1.
-            // Using a fifth instead of an octave gives a richer, less harsh chord.
-            const float v1Out = voice1[ch].processSample (shifterIn, ch);
-            const float v2Out = voice2[ch].processSample (shifterIn, ch);
+            const auto* fl = frozenLoop.getReadPointer (0);
+            const auto* fr = frozenLoop.getReadPointer (juce::jmin (1, frozenLoop.getNumChannels() - 1));
+            frozenL = (fl[i0] * (1.f - frac) + fl[i1] * frac) * loopGain;
+            frozenR = (fr[i0] * (1.f - frac) + fr[i1] * frac) * loopGain;
 
-            // Balance: voice 1 slightly louder, voice 2 as a gentler harmonic layer
-            const float shimmerRaw = v1Out * 0.65f + v2Out * 0.35f;
+            frozenReadPos += 1.f;
+            if (frozenReadPos >= static_cast<float> (frozenLength))
+                frozenReadPos = 0.f;
 
-            // One-pole LP to smooth grain-boundary artifacts
-            // Coefficient 0.25 = ~4kHz cutoff at 44.1kHz — removes the "grit"
-            lpState[ch] = 0.25f * shimmerRaw + 0.75f * lpState[ch];
-            const float shimmerOut = lpState[ch];
-
-            // Update feedback — clamp and attenuate to prevent runaway buildup
-            fb[s] = juce::jlimit (-1.f, 1.f, shimmerOut);
-
-            // Crystallize: lerp between decaying and frozen output
-            if (shouldFreeze)
-                frz[s] = shimmerOut;
-
-            const float wetOut = shimmerOut * (1.f - crystallizeAmount)
-                               + frz[s]     * crystallizeAmount;
-
-            // Wet/dry crossfade
-            wet[s] = dryIn * (1.f - blendFactor) + wetOut * blendFactor;
+            frozenEnv *= frozenDecayCoeff;
+            if (frozenEnv < 1e-5f)
+                frozenActive = false;
         }
+
+        const int ringPos = freezeWritePos & (kFreezeRingSize - 1);
+
+        for (int ch = 0; ch < numChannels; ++ch)
+        {
+            const float dryIn = in.getReadPointer (ch)[s];
+
+            // ── Shimmer cascade ──────────────────────────────────────────────
+            // Feedback comes back ~340ms later and gets shifted again, so the
+            // texture climbs the interval on every pass.
+            const float fbSample  = cascadeDelay.popSample (ch);
+            const float shifterIn = dryIn * blendFactor + fbSample * feedbackLevel;
+
+            const float v1 = voice1[ch].processSample (shifterIn, ch);
+            const float v2 = voice2[ch].processSample (shifterIn, ch);
+            const float raw = v1 * 0.65f + v2 * 0.35f;
+
+            // One-pole LP smooths grain-boundary artifacts
+            lpState[ch] = 0.25f * raw + 0.75f * lpState[ch];
+            const float live = lpState[ch];
+
+            // Damped, clamped feedback into the cascade delay
+            cascadeDamp[ch] = kCascadeDampLP * live
+                            + (1.f - kCascadeDampLP) * cascadeDamp[ch];
+            cascadeDelay.pushSample (ch, juce::jlimit (-1.f, 1.f, cascadeDamp[ch]));
+
+            // Record live shimmer into the freeze ring
+            freezeRing.getWritePointer (ch)[ringPos] = live;
+
+            // ── Output ───────────────────────────────────────────────────────
+            // Live layer rides the blend; the frozen drone deliberately does
+            // not — a latched crystal sustains even while you play.
+            const float frozen = (ch == 0 ? frozenL : frozenR) * frozenEnv;
+            wet.getWritePointer (ch)[s] =
+                  live * (1.f - crystallizeAmount * 0.3f)
+                + frozen * crystallizeAmount;
+        }
+
+        ++freezeWritePos;
     }
 }
 
@@ -150,24 +232,25 @@ void Shimmer::setCrystallize (float amount)
 void Shimmer::setInterval (int semitones)
 {
     intervalSemitones = semitones;
-    const float ratio = semitonesToRatio (semitones);
+    const float detune = kDetuneCents / 100.f;  // cents → semitones
+
     for (int ch = 0; ch < 2; ++ch)
     {
-        voice1[ch].setPitchRatio (ratio);
-        // Voice 2: a perfect fifth (7 semitones) above voice 1.
-        // Previously was an octave (+12) which produced very harsh two-octave stacking.
-        // A fifth gives a richer, more musical shimmer chord.
-        voice2[ch].setPitchRatio (semitonesToRatio (semitones + 7));
+        const float chDetune = (ch == 0 ? detune : -detune);
+        voice1[ch].setPitchRatio (semitonesToRatio (static_cast<float> (semitones) + chDetune));
+        // Voice 2: a perfect fifth above voice 1 for a richer shimmer chord
+        voice2[ch].setPitchRatio (semitonesToRatio (static_cast<float> (semitones) + 7.f - chDetune));
     }
 }
 
 void Shimmer::setFeedback (float feedback)
 {
-    // Cap at 0.6 to prevent runaway feedback buildup that creates harsh resonances
-    feedbackLevel = juce::jlimit (0.f, 0.6f, feedback);
+    // The cascade loop is damped and clamped, so it tolerates more feedback
+    // than the old instant loop — still capped well below unity.
+    feedbackLevel = juce::jlimit (0.f, 0.75f, feedback);
 }
 
-float Shimmer::semitonesToRatio (int semitones)
+float Shimmer::semitonesToRatio (float semitones)
 {
-    return std::pow (2.f, static_cast<float> (semitones) / 12.f);
+    return std::pow (2.f, semitones / 12.f);
 }

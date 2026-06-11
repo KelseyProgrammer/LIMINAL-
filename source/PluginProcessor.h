@@ -47,7 +47,8 @@ public:
     // APVTS — public so the editor can attach sliders
     juce::AudioProcessorValueTreeState apvts;
 
-    // Thread-safe reads for the UI
+    // Thread-safe reads for the UI.
+    // Envelope level is in normalized dB units: 0.0 = -60dB, 1.0 = 0dBFS.
     float getEnvelopeLevel() const { return lastEnvelopeLevel.load(); }
     float getBlendLevel()    const { return lastBlendLevel.load(); }
 
@@ -59,14 +60,16 @@ public:
     void triggerRamp() { rampTriggerPending.store (true); }
 
     // Ramp position: 0.0 = snapshot A, 1.0 = snapshot B
-    // Written by editor slider; also written by processBlock when latch animates
     std::atomic<float> rampPosition { 0.f };
     std::atomic<float> lfoPhase     { 0.f };  // 0.0–1.0, for UI LFO dot visualization
 
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
-    void syncParametersFromAPVTS();
+    void syncParametersFromAPVTS (int numSamples, double bpm);
+
+    // Detection source for this block: main input, or sidechain when enabled
+    float detectEnvelope (juce::AudioBuffer<float>& buffer);
 
     EnvelopeFollower envelopeFollower;
     LiminalEngine    liminalEngine;
@@ -79,7 +82,7 @@ private:
 
     // Parameter snapshots for Ramp A/B morph
     struct Snapshot {
-        float threshold = 0.3f, slew = 200.f, depth = 1.f;
+        float threshold = 0.5f, slew = 200.f, depth = 1.f;
         float haunt = 0.5f, crystallize = 0.f, possession = 0.5f;
         float mix = 1.f;
         int   interval = 0;
@@ -91,6 +94,11 @@ private:
     std::atomic<float> lastEnvelopeLevel  { 0.f };
     std::atomic<float> lastBlendLevel     { 0.f };
     std::atomic<bool>  rampTriggerPending { false };
+
+    // Auto-ramp: fire the morph when entering the negative space
+    float prevBlendForAutoRamp = 0.f;
+
+    int currentProgram = 0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PluginProcessor)
 };

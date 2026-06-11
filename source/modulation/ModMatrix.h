@@ -21,9 +21,12 @@ public:
     // Call once per processBlock
     void process (float envelopeValue);
 
-    void setLFORate (float rateHz);
+    void  setLFORate (float rateHz);
+    float getCurrentLFORate() const { return currentLFORate; }
 
 private:
+    float currentLFORate = 0.5f;
+
     // amounts[source][dest] — written from audio thread, always small fixed array
     float amounts[kNumSources][kNumDests] = {};
     float modValues[kNumDests]            = {};

@@ -367,3 +367,235 @@ TEST_CASE ("processBlock: no denormals under sustained silence", "[rt-safety]")
         }
     }
 }
+
+// ── HauntVerb tank ───────────────────────────────────────────────────────────
+
+#include "dsp/HauntVerb.h"
+#include "dsp/Shimmer.h"
+#include "dsp/PitchGhost.h"
+
+static float bufferRMS (const juce::AudioBuffer<float>& buf)
+{
+    float sum = 0.f;
+    for (int ch = 0; ch < buf.getNumChannels(); ++ch)
+    {
+        const float* d = buf.getReadPointer (ch);
+        for (int s = 0; s < buf.getNumSamples(); ++s) sum += d[s] * d[s];
+    }
+    return std::sqrt (sum / static_cast<float> (buf.getNumChannels() * buf.getNumSamples()));
+}
+
+static void fillSine (juce::AudioBuffer<float>& buf, float freq, double sr, int& phaseSample)
+{
+    for (int s = 0; s < buf.getNumSamples(); ++s)
+    {
+        const float v = 0.5f * std::sin (juce::MathConstants<float>::twoPi * freq
+                                         * static_cast<float> (phaseSample + s) / static_cast<float> (sr));
+        for (int ch = 0; ch < buf.getNumChannels(); ++ch)
+            buf.setSample (ch, s, v);
+    }
+    phaseSample += buf.getNumSamples();
+}
+
+TEST_CASE ("HauntVerb: tank produces a tail that outlives the input", "[verb]")
+{
+    HauntVerb verb;
+    verb.prepare (makeSpec());
+    verb.setHaunt (0.9f);
+    verb.setEnvelopeLevel (0.1f);
+
+    juce::AudioBuffer<float> in (2, 512), wet (2, 512);
+
+    // Excite the verb with a quarter second of sine at full blend
+    int phase = 0;
+    for (int b = 0; b < 22; ++b)
+    {
+        fillSine (in, 440.f, 44100.0, phase);
+        verb.renderWet (in, wet, 1.f);
+    }
+
+    // Now feed silence — measure the tail 0.5s later
+    in.clear();
+    float rmsAtHalfSecond = 0.f;
+    for (int b = 0; b < 44; ++b)   // ~0.51s of silence
+    {
+        verb.renderWet (in, wet, 1.f);
+        rmsAtHalfSecond = bufferRMS (wet);
+    }
+
+    // An allpass-only diffuser (~80ms) would be silent here; the tank rings on
+    REQUIRE (rmsAtHalfSecond > 1e-4f);
+}
+
+TEST_CASE ("HauntVerb: silence in, empty tank -> silence out", "[verb]")
+{
+    HauntVerb verb;
+    verb.prepare (makeSpec());
+    verb.setHaunt (0.9f);
+
+    juce::AudioBuffer<float> in (2, 512), wet (2, 512);
+    in.clear();
+    verb.renderWet (in, wet, 0.f);
+
+    REQUIRE (bufferRMS (wet) < 1e-6f);
+}
+
+// ── Shimmer freeze ───────────────────────────────────────────────────────────
+
+TEST_CASE ("Shimmer: crystallize=1 sustains a drone through silence", "[shimmer]")
+{
+    Shimmer shimmer;
+    shimmer.prepare (makeSpec());
+    shimmer.setInterval (12);
+    shimmer.setCrystallize (0.f);
+
+    juce::AudioBuffer<float> in (2, 512), wet (2, 512);
+
+    // Build up live shimmer for ~1.2s so the freeze ring holds real audio
+    int phase = 0;
+    for (int b = 0; b < 100; ++b)
+    {
+        fillSine (in, 330.f, 44100.0, phase);
+        shimmer.renderWet (in, wet, 1.f);
+    }
+
+    // Latch the crystal, then feed silence at blend 0 for one second
+    shimmer.setCrystallize (1.f);
+    in.clear();
+
+    float rms = 0.f;
+    for (int b = 0; b < 86; ++b)
+    {
+        shimmer.renderWet (in, wet, 0.f);
+        rms = bufferRMS (wet);
+    }
+
+    REQUIRE (shimmer.isFrozen());
+    REQUIRE (rms > 1e-4f);   // the drone persists with no input and no blend
+}
+
+TEST_CASE ("Shimmer: crystallize=0 decays to silence after input stops", "[shimmer]")
+{
+    Shimmer shimmer;
+    shimmer.prepare (makeSpec());
+    shimmer.setInterval (12);
+    shimmer.setCrystallize (0.f);
+
+    juce::AudioBuffer<float> in (2, 512), wet (2, 512);
+
+    int phase = 0;
+    for (int b = 0; b < 50; ++b)
+    {
+        fillSine (in, 330.f, 44100.0, phase);
+        shimmer.renderWet (in, wet, 1.f);
+    }
+
+    // Silence + zero blend: the cascade dies out (renderWet early-outs to clear)
+    in.clear();
+    float rms = 1.f;
+    for (int b = 0; b < 86; ++b)
+    {
+        shimmer.renderWet (in, wet, 0.f);
+        rms = bufferRMS (wet);
+    }
+
+    REQUIRE (rms < 1e-5f);
+}
+
+// ── PitchGhost ───────────────────────────────────────────────────────────────
+
+TEST_CASE ("PitchGhost: capture then render produces a phantom voice", "[ghost]")
+{
+    PitchGhost ghost;
+    ghost.prepare (makeSpec());
+    ghost.setPossession (0.8f);
+
+    juce::AudioBuffer<float> in (2, 512), wet (2, 512);
+
+    // Fill the ring with a sine, then capture
+    int phase = 0;
+    for (int b = 0; b < 30; ++b)
+    {
+        fillSine (in, 220.f, 44100.0, phase);
+        ghost.pushAudio (in);
+    }
+    ghost.triggerCapture();
+
+    wet.clear();
+    ghost.renderWet (wet, 1.f);
+    // Fade-in means the very first block is quiet; render a second one
+    wet.clear();
+    ghost.renderWet (wet, 1.f);
+
+    REQUIRE (bufferRMS (wet) > 1e-4f);
+}
+
+TEST_CASE ("PitchGhost: three captures play as a choir", "[ghost]")
+{
+    PitchGhost ghost;
+    ghost.prepare (makeSpec());
+    ghost.setPossession (0.9f);
+
+    juce::AudioBuffer<float> in (2, 512), wetOne (2, 512), wetThree (2, 512);
+
+    int phase = 0;
+    for (int b = 0; b < 30; ++b)
+    {
+        fillSine (in, 220.f, 44100.0, phase);
+        ghost.pushAudio (in);
+    }
+
+    ghost.triggerCapture();
+    wetOne.clear();
+    ghost.renderWet (wetOne, 1.f);
+    wetOne.clear();
+    ghost.renderWet (wetOne, 1.f);
+    const float rmsOne = bufferRMS (wetOne);
+
+    ghost.triggerCapture();
+    ghost.triggerCapture();
+    wetThree.clear();
+    ghost.renderWet (wetThree, 1.f);
+    wetThree.clear();
+    ghost.renderWet (wetThree, 1.f);
+    const float rmsThree = bufferRMS (wetThree);
+
+    // Three overlapping ghosts carry more energy than one
+    REQUIRE (rmsThree > rmsOne);
+}
+
+// ── Full chain: engines wake in the negative space ───────────────────────────
+
+TEST_CASE ("LiminalEngine: atmosphere appears after sound stops", "[engine][integration]")
+{
+    LiminalEngine engine;
+    engine.prepare (makeSpec());
+    engine.setThreshold (0.5f);
+    engine.setSlew (5.f);
+    engine.setDepth (1.f);
+    engine.setMix (1.f);
+    engine.setHaunt (0.8f);
+    engine.setPossession (0.8f);
+
+    juce::AudioBuffer<float> buf (2, 512);
+
+    // Play a sine "note" with the envelope above threshold — engines asleep
+    int phase = 0;
+    for (int b = 0; b < 50; ++b)
+    {
+        fillSine (buf, 440.f, 44100.0, phase);
+        engine.process (buf, 0.9f);
+    }
+
+    // Stop playing: silence in, envelope below threshold — engines wake.
+    // The PitchGhost capture from the crossing must be audible.
+    float rms = 0.f;
+    for (int b = 0; b < 20; ++b)
+    {
+        buf.clear();
+        engine.process (buf, 0.0f);
+        rms = juce::jmax (rms, bufferRMS (buf));
+    }
+
+    REQUIRE (rms > 1e-4f);   // something haunts the silence
+}

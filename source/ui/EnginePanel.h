@@ -44,4 +44,9 @@ private:
     // Only for Shimmer: interval ComboBox
     std::unique_ptr<juce::ComboBox> intervalBox;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> intervalAttachment;
+
+    // Only for PitchGhost: drift rate knob + direction selector
+    std::unique_ptr<KnobComponent> driftKnob;
+    std::unique_ptr<juce::ComboBox> driftDirBox;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> driftDirAttachment;
 };
