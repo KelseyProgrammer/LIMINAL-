@@ -1,82 +1,88 @@
 # LIMINAL — Claude.md
-## Ament Audio | VST3/AU Plugin | JUCE + Pamplejuce
+## Ament Audio | VST3/AU/CLAP Plugin | JUCE 8 + Pamplejuce
 
 ---
 
 ## Project Overview
 
-**LIMINAL** is a threshold-based negative-space effect plugin. It monitors the input signal's amplitude envelope and activates a suite of atmospheric engines — HAUNT VERB, SHIMMER, and PITCH GHOST — in the space *between* notes: decays, silences, and breaths. The louder the silence, the more alive LIMINAL becomes.
+**LIMINAL** is a threshold-based negative-space effect plugin. It monitors the input signal's amplitude envelope and activates HAUNT VERB, SHIMMER, and PITCH GHOST in the space *between* notes: decays, silences, and breaths.
 
 **Tagline:** *"The effect that wakes up when you stop playing."*
-
-**Format:** VST3 / AU (macOS + Windows)
-**Template:** [Pamplejuce](https://github.com/sudara/pamplejuce) (JUCE 7.x, CMake)
-**Plugin Type:** `AudioProcessor` — effect (not instrument)
-**Stereo I/O:** Yes. Mono-compatible.
+**Version:** 0.2.0
+**Format:** VST3 / AU / CLAP (macOS + Windows + Linux)
+**Template:** [Pamplejuce](https://github.com/sudara/pamplejuce) (JUCE 8.x, CMake 3.25+)
+**Plugin Type:** `AudioProcessor` — stereo effect (mono-compatible)
+**Model:** claude-fable-5 (configured in `.claude/settings.json`)
 
 ---
 
-## Brand & Aesthetic Context
+## Brand & Aesthetic
 
 LIMINAL is the third plugin in the Ament Audio trilogy:
 
-| Plugin | Domain | Transforms |
+| Plugin | Domain | Character |
 |---|---|---|
 | FREECODER | Spectral content | Morphs timbres |
 | HALATION | The bloom/halo | Diffuses and glows |
 | LIMINAL | Negative space | Haunts the silence |
 
-UI color language: **deep cobalt (`#0a0f2e`), aged gold (`#c9a84c`), ice blue (`#a8c4e8`), ghost white (`#e8e8f0`)** — inspired by celestial tarot geometry. The mysticism comes through geometry and glow, not ornamentation. See UI section for full spec.
+**Color palette:** deep cobalt `#0a0f2e`, aged gold `#c9a84c`, ice blue `#a8c4e8`, ghost white `#e8e8f0`
 
 ---
 
-## Repository Structure (Pamplejuce)
+## Repository Structure
 
 ```
 LIMINAL/
 ├── CMakeLists.txt
 ├── CMakePresets.json
-├── Claude.md                        ← this file
+├── Claude.md                         ← this file
+├── AGENTS.md                         ← mirror of Claude.md for agent context
 ├── SETUP_GUIDE.md
+├── VERSION                           ← 0.2.0
+├── .claude/
+│   └── settings.json                 ← model: claude-fable-5
 ├── .github/
 │   └── workflows/
-│       └── cmake_ctest.yml
+│       ├── build_and_test.yml
+│       └── nightly.yml
 ├── source/
-│   ├── PluginProcessor.h / .cpp     ← AudioProcessor root
-│   ├── PluginEditor.h / .cpp        ← AudioProcessorEditor root
-│   │
+│   ├── PluginProcessor.h / .cpp
+│   ├── PluginEditor.h / .cpp
 │   ├── dsp/
 │   │   ├── EnvelopeFollower.h / .cpp
-│   │   ├── LiminalEngine.h / .cpp   ← master DSP coordinator
+│   │   ├── LiminalEngine.h / .cpp
 │   │   ├── HauntVerb.h / .cpp
 │   │   ├── Shimmer.h / .cpp
 │   │   └── PitchGhost.h / .cpp
-│   │
 │   ├── modulation/
-│   │   ├── RampSystem.h / .cpp      ← RAMP A/B morph system
-│   │   └── ModMatrix.h / .cpp       ← LFO + envelope routing
-│   │
+│   │   ├── RampSystem.h / .cpp
+│   │   └── ModMatrix.h / .cpp
 │   └── ui/
 │       ├── LiminalLookAndFeel.h / .cpp
-│       ├── ThresholdDisplay.h / .cpp  ← waveform + threshold line
-│       ├── EnginePanel.h / .cpp       ← three engine sub-panels
+│       ├── ThresholdDisplay.h / .cpp
+│       ├── EnginePanel.h / .cpp
 │       └── KnobComponent.h / .cpp
-│
 ├── tests/
-│   └── LiminalTests.cpp
+│   └── LiminalTests.cpp              ← 30 tests, all passing
 └── assets/
-    └── fonts/
+    ├── fonts/
+    └── images/
+        └── liminal_bg.png            ← 950×668 reference artwork (UI background)
 ```
+
+---
+
+## Implementation Status — ALL COMPLETE
+
+All DSP engines, modulation, UI, and preset systems are implemented and tested. The plugin builds and runs on macOS. The remaining gap to a signed distribution release is Apple Developer / Azure code signing credentials (not a code problem).
 
 ---
 
 ## Class Architecture
 
-### Top Level
-
 ```
 PluginProcessor (AudioProcessor)
-    │
     ├── AudioProcessorValueTreeState (APVTS)
     ├── EnvelopeFollower
     ├── LiminalEngine
@@ -87,615 +93,353 @@ PluginProcessor (AudioProcessor)
     └── ModMatrix
 
 PluginEditor (AudioProcessorEditor)
-    │
-    ├── LiminalLookAndFeel
-    ├── ThresholdDisplay
-    ├── EnginePanel (x3 sub-panels)
-    └── KnobComponent (x9 parameter knobs)
+    ├── ContentComponent (950×668, scaled via AffineTransform)
+    │     ├── LiminalLookAndFeel
+    │     ├── ThresholdDisplay (star animation, 297,20,360,220)
+    │     ├── EnginePanel × 3
+    │     └── KnobComponent × 9+
+    └── [scale persisted in apvts.state "uiScale"]
 ```
 
 ---
 
-## DSP Architecture
+## DSP Architecture (Shipped)
 
 ### EnvelopeFollower
 
-Tracks the RMS amplitude of the input signal and outputs a normalized 0.0–1.0 value.
+One-pole IIR envelope follower. Uses normalized dB units: 0 = −60dB, 1 = 0dBFS. Per-sample mono max-abs detection.
 
 ```cpp
-class EnvelopeFollower {
-public:
-    void prepare(double sampleRate);
-    float process(float inputSample);       // call per sample
-    float getCurrentLevel() const;          // 0.0 - 1.0
-    void setAttack(float attackMs);
-    void setRelease(float releaseMs);
-
-private:
-    float envelope = 0.f;
-    float attackCoeff, releaseCoeff;
-    double sampleRate;
-};
+void prepare(double sampleRate);
+float process(float inputSample);    // call per sample
+float getCurrentLevel() const;       // 0.0–1.0 normalized
+void setAttack(float attackMs);
+void setRelease(float releaseMs);
 ```
 
-- **Attack:** ~5ms (fast enough to catch transients)
-- **Release:** ~200ms default (user-adjustable via SLEW parameter)
-- Uses standard one-pole IIR envelope follower formula
+- Attack: ~5ms default
+- Release: ~200ms default (user-adjustable via SLEW)
 
 ---
 
 ### LiminalEngine
 
-Master DSP coordinator. Receives the envelope level, compares to threshold, computes a wet blend factor, and routes audio through the three engines.
+Master coordinator. Engines render **parallel wet-only buses** via `renderWet(in, wet, blend)`. Shimmer pipes 0.85 of its output into HauntVerb's input. Final output: `dry + wetSum * mix`.
 
 ```cpp
-class LiminalEngine {
-public:
-    void prepare(const juce::dsp::ProcessSpec& spec);
-    void process(juce::AudioBuffer<float>& buffer, float envelopeLevel);
-    void setThreshold(float normalizedThreshold);   // 0.0 - 1.0
-    void setSlew(float slewMs);
-    void setDepth(float depth);                     // 0.0 - 1.0
-    void setMix(float mix);                         // 0.0 - 1.0
-
-private:
-    float computeBlend(float envelopeLevel);        // returns 0.0-1.0 wet factor
-    float currentBlend = 0.f;
-    float targetBlend  = 0.f;
-    float slewRate     = 0.f;
-
-    HauntVerb  hauntVerb;
-    Shimmer    shimmer;
-    PitchGhost pitchGhost;
-
-    float threshold = 0.3f;
-    float depth     = 1.0f;
-    float mix       = 1.0f;
-};
+void prepare(const juce::dsp::ProcessSpec& spec);
+void process(juce::AudioBuffer<float>& buffer, float envelopeLevel);
+void setThreshold(float t);    // 0.0–1.0 normalized dB
+void setSlew(float slewMs);
+void setDepth(float depth);
+void setMix(float mix);
+void setInvertMode(bool invert);
+void setTone(float tone);      // −1 dark LP, +1 bright HP
+float getCurrentBlend() const;
 ```
 
 **Blend logic:**
 ```
-if envelopeLevel < threshold:
-    targetBlend = (1.0 - (envelopeLevel / threshold)) * depth
+if (!invertMode && envelopeLevel < threshold):
+    targetBlend = (1 - envelopeLevel/threshold) * depth
+elif (invertMode && envelopeLevel >= threshold):
+    targetBlend = ((envelopeLevel - threshold) / (1 - threshold)) * depth
 else:
-    targetBlend = 0.0
+    targetBlend = 0
 
 currentBlend += (targetBlend - currentBlend) * slewRate  // one-pole slew
 ```
+
+Tone: one-pole LP (dark) or HP (bright) applied post-mix. Bypassed at tone=0.
 
 ---
 
 ### HauntVerb
 
-A diffusion-based reverb whose character *opens up* as the signal fades. Not a standard convolution reverb — uses an allpass diffusion network with a high-pass filter that sweeps upward as signal drops.
+Diffusion + cross-coupled tank reverb. Character opens as signal fades.
 
 ```cpp
-class HauntVerb {
-public:
-    void prepare(const juce::dsp::ProcessSpec& spec);
-    void process(juce::AudioBuffer<float>& buffer, float blendFactor);
-    void setHaunt(float amount);        // 0.0 - 1.0, bloom intensity
-    void setEnvelopeLevel(float level); // fed from EnvelopeFollower
-
-private:
-    // Allpass diffusion network (4 stages per channel)
-    juce::dsp::DelayLine<float> diffusionLines[4];
-    float diffusionCoeffs[4] = { 0.7f, 0.6f, 0.5f, 0.4f };
-
-    // High-pass that opens as level drops
-    juce::dsp::StateVariableTPTFilter<float> hpFilter;
-    float computeHPFrequency(float envelopeLevel); // maps 0.0→4kHz, 1.0→80Hz
-
-    float hauntAmount = 0.5f;
-    double sampleRate = 44100.0;
-};
+void prepare(const juce::dsp::ProcessSpec& spec);
+void renderWet(const juce::AudioBuffer<float>& in,
+               juce::AudioBuffer<float>& wet, float blendFactor);
+void setHaunt(float amount);        // 0–1, maps to tank feedback 0.55–0.95
+void setEnvelopeLevel(float level);
 ```
 
-**Key behavior:**
-- Pre-delay stretches from 10ms → 60ms as envelope drops
-- Diffusion increases (longer delay times) as signal fades
-- HP filter sweeps from ~80Hz at full signal to ~4kHz in deep silence — counterintuitive brightening that creates the "exhale" quality
+**Architecture:**
+- Input blend-gated: `in * (1 - envelopeLevel)` so tail rings out after signal stops
+- 4-stage allpass diffusion per channel (coefficients: 0.52, 0.42, 0.33, 0.25; one-pole LP at 0.28 in allpass feedback to prevent metallic ringing)
+- Cross-coupled stereo tank: 97ms (L) / 113ms (R) delay lines, sine-modulated ±0.9ms @ 0.23Hz
+- Damping LP in tank feedback
+- Pre-delay stretches 10ms → 60ms as envelope drops
+- HP sweeps ~80Hz → ~4kHz in deep silence (counterintuitive brightening = "exhale" quality)
+- HAUNT knob maps to tank feedback 0.55–0.95
 
 ---
 
 ### Shimmer
 
-Pitch-shifted feedback layer. Uses two pitch shifter voices (primary interval + optional second interval) that feed back into themselves. Activates only in the negative space via blend factor from LiminalEngine.
+OLA pitch-shifter cascade → damped feedback delay. Crystallize = real freeze.
 
 ```cpp
-class Shimmer {
-public:
-    void prepare(const juce::dsp::ProcessSpec& spec);
-    void process(juce::AudioBuffer<float>& buffer, float blendFactor);
-    void setCrystallize(float amount);      // 0.0 - 1.0, freeze/hold
-    void setInterval(int semitones);        // interval in semitones
-    void setFeedback(float feedback);       // 0.0 - 0.95
-
-private:
-    // Phase vocoder pitch shifter (two voices)
-    // Voice 1: user-defined interval
-    // Voice 2: octave above voice 1
-    PitchShifterVoice voice1, voice2;
-
-    float crystallizeAmount = 0.f;
-    float feedbackLevel     = 0.5f;
-    int   intervalSemitones = 12;           // default: octave up
-
-    juce::AudioBuffer<float> feedbackBuffer;
-};
+void prepare(const juce::dsp::ProcessSpec& spec);
+void renderWet(const juce::AudioBuffer<float>& in,
+               juce::AudioBuffer<float>& wet, float blendFactor);
+void setCrystallize(float amount);   // 0–1
+void setInterval(int semitones);
+void setFeedback(float feedback);    // 0–0.6
+bool isFrozen() const;
 ```
 
-**Crystallize behavior:**
-- At 0.0: shimmer decays normally with the blend factor
-- At 1.0: shimmer output is latched and held as a sustained drone regardless of further signal changes. Acts like a freeze.
-- Intermediate values: partial hold with slow decay
+**Architecture:**
+- Two OLA pitch-shifter voices: voice 1 = user interval, voice 2 = interval + 7 semitones (fifth avoids harsh 2-octave stacking)
+- 4096-sample grains, 50% offset, distance-based Hann window (always sums to 1.0)
+- writePos starts one full grain ahead of readPos to prevent grinding on pitch ratios > 1
+- One-pole LP on output to smooth grain boundaries
+- ±3-cent L/R detune per voice for stereo width
+- Cascade via 340ms damped feedback delay
+- **Crystallize:** freeze ring (2s) latches on amplitude rise past 0.08; crossfaded loop playback; sustains at 1.0 independent of blend; decay 0.5–8.5s when crystallize < 1
 
-**Interval presets (map to UI selector):**
+**Interval map:**
 ```
-0: Octave Up (+12)
-1: Fifth Up (+7)
-2: Octave + Fifth (+19)
-3: Minor 2nd (+1) — dissonant/eerie
-4: Tritone (+6)   — maximally unsettling
+0: Oct (+12)       2: Oct+5th (+19)    4: Tritone (+6)
+1: 5th (+7)        3: m2 (+1)
 ```
 
 ---
 
 ### PitchGhost
 
-The most unique engine. Captures a micro-snapshot (64–256 samples) of the input signal just as it crosses below the threshold, then plays it back as a detuned phantom voice that slowly drifts away from the original pitch.
+Three round-robin ghost voices. Captures signal snapshot at threshold crossing; replays as detuning phantom.
 
 ```cpp
-class PitchGhost {
-public:
-    void prepare(const juce::dsp::ProcessSpec& spec);
-    void process(juce::AudioBuffer<float>& buffer, float blendFactor);
-    void setPossession(float amount);       // 0.0 - 1.0, drift intensity
-    void setDriftRate(float rateHz);        // how fast ghost detunes
-    void setDriftDirection(int direction);  // -1=down, 0=wander, 1=up
-    void setGhostDecay(float decayMs);
-
-    // Called by LiminalEngine when threshold is crossed downward
-    void triggerCapture(const juce::AudioBuffer<float>& inputBuffer);
-
-private:
-    juce::AudioBuffer<float> captureBuffer;
-    bool   isCapturing  = false;
-    bool   ghostActive  = false;
-    float  currentPitch = 0.f;      // current detuning in cents
-    float  targetPitch  = 0.f;
-    float  possession   = 0.5f;
-    float  driftRate    = 0.1f;     // Hz
-    int    driftDir     = 0;
-
-    float  decayEnvelope = 1.f;
-    float  decayCoeff    = 0.f;
-
-    void updateDrift(float deltaTime);
-};
+void prepare(const juce::dsp::ProcessSpec& spec);
+void renderWet(juce::AudioBuffer<float>& wet, float blendFactor);
+void pushAudio(const juce::AudioBuffer<float>& input);   // called each block
+void triggerCapture();                                    // called at threshold crossing
+void setPossession(float amount);    // 0=alien drift, 1=tight double
+void setDriftRate(float rateHz);
+void setDriftDirection(int dir);     // -1=down, 0=wander, 1=up
+void setGhostDecay(float decayMs);
 ```
 
-**Possession behavior:**
-- **Low possession (0.0–0.3):** Ghost immediately drifts far and free — sounds alien
-- **Mid possession (0.3–0.7):** Ghost struggles between source pitch and drift — creates beating/chorus
-- **High possession (0.8–1.0):** Ghost barely drifts, stays close to source pitch — tight shimmer double
+**Architecture:**
+- Ring buffer holds last ~256 samples; `triggerCapture()` snapshots into per-voice capture buffer
+- Crossfade window near buffer boundaries (fadeZone = min(256, captureLength×0.05)) prevents clicks at loop wrap
+- Drift: up to ±1200 cents at Possession 0; near-zero at Possession 1
+- 3 voices play as a choir — each capture adds to the ensemble
+- Fade-in on first render block after capture
+
+---
+
+### RampSystem
+
+Morphs between two saved parameter states (Chase Bliss-style).
+
+```cpp
+void setRampTime(float timeMs, double sampleRate);
+void trigger();                // reverses direction A↔B
+float getPosition() const;    // 0=state A, 1=state B
+void process(int numSamples);
+```
+
+---
+
+### ModMatrix
+
+Routes LFO and envelope to parameter destinations.
+
+```cpp
+enum Source  { LFO, ENVELOPE };
+enum Dest    { THRESHOLD, DEPTH, HAUNT, CRYSTALLIZE, POSSESSION, TONE };
+void setRouting(Source src, Dest dest, float amount);   // amount: −1 to +1
+float getModValue(Dest dest) const;
+void process(float lfoValue, float envelopeValue);
+```
 
 ---
 
 ## Parameter Model (APVTS)
 
-All parameters registered in `PluginProcessor.cpp` via `AudioProcessorValueTreeState`.
+All parameters registered in `PluginProcessor.cpp` → `createParameterLayout()`:
 
-```cpp
-// In createParameterLayout():
-
-layout.add(std::make_unique<juce::AudioParameterFloat>(
-    "threshold", "Threshold",
-    juce::NormalisableRange<float>(0.f, 1.f, 0.01f), 0.3f));
-
-layout.add(std::make_unique<juce::AudioParameterFloat>(
-    "slew", "Slew",
-    juce::NormalisableRange<float>(5.f, 2000.f, 1.f, 0.3f), 200.f)); // ms, skewed
-
-layout.add(std::make_unique<juce::AudioParameterFloat>(
-    "depth", "Depth",
-    juce::NormalisableRange<float>(0.f, 1.f, 0.01f), 1.0f));
-
-layout.add(std::make_unique<juce::AudioParameterFloat>(
-    "haunt", "Haunt",
-    juce::NormalisableRange<float>(0.f, 1.f, 0.01f), 0.5f));
-
-layout.add(std::make_unique<juce::AudioParameterFloat>(
-    "crystallize", "Crystallize",
-    juce::NormalisableRange<float>(0.f, 1.f, 0.01f), 0.0f));
-
-layout.add(std::make_unique<juce::AudioParameterFloat>(
-    "possession", "Possession",
-    juce::NormalisableRange<float>(0.f, 1.f, 0.01f), 0.5f));
-
-layout.add(std::make_unique<juce::AudioParameterChoice>(
-    "interval", "Interval",
-    juce::StringArray{"Oct", "5th", "Oct+5th", "m2", "Tritone"}, 0));
-
-layout.add(std::make_unique<juce::AudioParameterFloat>(
-    "tone", "Tone",
-    juce::NormalisableRange<float>(-1.f, 1.f, 0.01f), 0.0f)); // -1=dark, +1=bright
-
-layout.add(std::make_unique<juce::AudioParameterFloat>(
-    "mix", "Mix",
-    juce::NormalisableRange<float>(0.f, 1.f, 0.01f), 1.0f));
-
-// Modulation / advanced
-layout.add(std::make_unique<juce::AudioParameterBool>(
-    "invertMode", "Invert Mode", false));
-
-layout.add(std::make_unique<juce::AudioParameterBool>(
-    "latch", "Latch", false));
-
-layout.add(std::make_unique<juce::AudioParameterFloat>(
-    "rampA", "Ramp A",
-    juce::NormalisableRange<float>(0.f, 1.f, 0.01f), 0.0f));
-
-layout.add(std::make_unique<juce::AudioParameterFloat>(
-    "rampB", "Ramp B",
-    juce::NormalisableRange<float>(0.f, 1.f, 0.01f), 1.0f));
-
-layout.add(std::make_unique<juce::AudioParameterFloat>(
-    "rampTime", "Ramp Time",
-    juce::NormalisableRange<float>(100.f, 10000.f, 1.f, 0.3f), 2000.f)); // ms
-```
+| ID | Name | Range | Default |
+|---|---|---|---|
+| threshold | Threshold | 0–1 (0.01 step) | 0.3 |
+| slew | Slew | 5–2000ms (log) | 200 |
+| depth | Depth | 0–1 | 1.0 |
+| haunt | Haunt | 0–1 | 0.5 |
+| crystallize | Crystallize | 0–1 | 0.0 |
+| possession | Possession | 0–1 | 0.5 |
+| interval | Interval | Oct/5th/Oct+5th/m2/Tritone | Oct |
+| tone | Tone | −1 to +1 | 0.0 |
+| mix | Mix | 0–1 | 1.0 |
+| invertMode | Invert Mode | bool | false |
+| latch | Latch | bool | false |
+| sidechain | Sidechain | bool | false |
+| autoRamp | Auto Ramp | bool | false |
+| lfoSync | LFO Sync | bool | false |
+| rampSync | Ramp Sync | bool | false |
+| rampA | Ramp A | 0–1 | 0.0 |
+| rampB | Ramp B | 0–1 | 1.0 |
+| rampTime | Ramp Time | 100–10000ms (log) | 2000 |
+| driftRate | Drift Rate | 0.01–2.0 Hz | 0.1 |
+| driftDir | Drift Dir | −1/0/+1 | 0 |
+| ghostDecay | Ghost Decay | 100–5000ms | 1000 |
 
 ---
 
-## Modulation System
-
-### RampSystem
-
-Interpolates between two parameter states (RAMP A and RAMP B) over a user-defined time. Chase Bliss-style state morphing.
+## Audio Processing Flow
 
 ```cpp
-class RampSystem {
-public:
-    void setRampTime(float timeMs, double sampleRate);
-    void trigger();                         // start morph A→B or B→A
-    float getPosition() const;             // 0.0 = state A, 1.0 = state B
-    void process(int numSamples);
-
-private:
-    float position     = 0.f;
-    float increment    = 0.f;
-    bool  direction    = true;             // true = A→B, false = B→A
-};
-```
-
-### ModMatrix
-
-Routes LFO and envelope sources to parameter destinations.
-
-```cpp
-class ModMatrix {
-public:
-    enum Source  { LFO, ENVELOPE };
-    enum Dest    { THRESHOLD, DEPTH, HAUNT, CRYSTALLIZE, POSSESSION, TONE };
-
-    void setRouting(Source src, Dest dest, float amount); // amount: -1.0 to 1.0
-    float getModValue(Dest dest) const;
-    void process(float lfoValue, float envelopeValue);
-
-private:
-    struct Route { Source src; Dest dest; float amount; };
-    std::vector<Route> routes;
-    float modValues[6] = {};
-};
-```
-
----
-
-## Audio Processing Flow (processBlock)
-
-```cpp
-void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer,
-                                   juce::MidiBuffer& midiMessages)
+void PluginProcessor::processBlock(AudioBuffer<float>& buffer, MidiBuffer& midi)
 {
     juce::ScopedNoDenormals noDenormals;
 
-    // 1. Update parameters from APVTS
-    syncParametersFromAPVTS();
+    syncParametersFromAPVTS();   // SmoothedValue::skip(numSamples) per param
 
-    // 2. Process envelope follower (per sample, use first channel)
+    // Envelope follower (mono max-abs, per sample; sidechain bus if enabled)
     float envelopeLevel = 0.f;
-    for (int sample = 0; sample < buffer.getNumSamples(); ++sample) {
-        envelopeLevel = envelopeFollower.process(buffer.getSample(0, sample));
-    }
+    for (int s = 0; s < buffer.getNumSamples(); ++s)
+        envelopeLevel = envelopeFollower.process(src[s]);
 
-    // 3. Update modulation
-    float lfoValue = modMatrix.getLFOValue(); // internal LFO tick
+    // MIDI: note-on → ghost capture
+    for (const auto meta : midi)
+        if (meta.getMessage().isNoteOn())
+            liminalEngine.triggerGhostCapture(buffer);
+
+    // Modulation
     modMatrix.process(lfoValue, envelopeLevel);
-
-    // 4. Apply ramp system
     rampSystem.process(buffer.getNumSamples());
 
-    // 5. Main engine process
+    // Main engine (parallel wet buses internally)
     liminalEngine.process(buffer, envelopeLevel);
-
-    // 6. Apply output mix (wet/dry)
-    applyMix(buffer, dryBuffer);
 }
 ```
 
----
-
-## UI Architecture
-
-### Design Philosophy
-
-The UI draws from **celestial tarot geometry** — deep cobalt blue fields, aged gold line work, and a central radial/star motif — filtered through a clean, functional plugin aesthetic. The mysticism comes from geometry and glow, not ornamentation. No filigree. No decorative borders. The star breathes; everything else is disciplined.
-
-Reference image: tarot card with deep cobalt background, gold hexagram with radiating lines, moon/star corner medallions, and a luminous gradient from dark center outward.
+**Key real-time safety rules:**
+- No allocations in processBlock — all heap work in `prepareToPlay` / `prepare()`
+- `juce::SmoothedValue<float>` for all APVTS reads; call `skip(numSamples)` not `getNextValue()` once per block (was a critical bug; now fixed)
+- `juce::ScopedNoDenormals` at top of processBlock
+- Lock-free `juce::AbstractFifo` ring buffer for UI envelope data (60fps timer)
 
 ---
 
-### Layout (800 × 500px)
+## UI Architecture (Shipped)
 
-```
-┌─────────────────────────────────────────────────────────┐
-│  LIMINAL                             [AMENT AUDIO logo] │
-│  ─────────────────────────────────────────────────────  │
-│                                                         │
-│        ┌──────────────────────────────────┐             │
-│        │     CELESTIAL THRESHOLD DISPLAY  │             │
-│        │                                  │             │
-│        │   ✦ hexagram — breathes with     │             │
-│        │     engine activation level      │             │
-│        │   — gold threshold ring          │             │
-│        │   — radiating lines pulse        │             │
-│        │     per engine (3 axes)          │             │
-│        └──────────────────────────────────┘             │
-│                                                         │
-│  [THRESHOLD]  [SLEW]   [DEPTH]   [TONE]   [MIX]        │
-│                                                         │
-│  ┌──────────────┬──────────────┬──────────────────┐     │
-│  │  HAUNT VERB  │   SHIMMER    │   PITCH GHOST    │     │
-│  │              │              │                  │     │
-│  │  [HAUNT]     │ [CRYSTALLIZE]│  [POSSESSION]    │     │
-│  │              │ [INTERVAL ▾] │  [DRIFT DIR ◀▶]  │     │
-│  │  ☽ active    │  ✦ active    │   ✧ active       │     │
-│  └──────────────┴──────────────┴──────────────────┘     │
-│                                                         │
-│  [RAMP A] ────────●──── [RAMP B]  [RAMP TIME] [LATCH]  │
-└─────────────────────────────────────────────────────────┘
-```
+**Window:** 950×668px ContentComponent, editor resizable 50–200% via AffineTransform (aspect-locked, scale stored in `apvts.state["uiScale"]`).
+
+**Background:** `assets/images/liminal_bg.png` (950×668) drawn 1:1. All controls pixel-aligned over the painted positions.
+
+**Control centres (ContentComponent coordinates):**
+
+| Row | y | x positions | Knob dia |
+|---|---|---|---|
+| Top (THRESHOLD/SLEW/DEPTH/TONE/MIX) | 302 | 103/278/453/629/803 | 56px |
+| Engine (HAUNT/CRYSTALLIZE/POSSESSION) | 401 | 167/472/779 | 52px |
+| Mod row | 526 | 105/289/473/656/841 | 44px |
+
+Engine panel bounds (x,y,w,h): `(10,355,300,100)` / `(320,355,300,100)` / `(635,355,300,100)`
+
+ThresholdDisplay: bounds `(297,20,360,220)`, star centre `(477,130)`, draggable threshold ring r=58–104px
+
+Additional controls: INV `(897,294,32,32)`, SC `(897,330,32,18)`, A `(45,604)`, B `(771,604)`, LATCH `(803,602)`, AUTO `(803,576)`, rampSync `(698,575)`, lfoSync `(75,562)`, TIME centre `(898,604)`
+
+Ghost panel sub-controls: Drift knob `(40,30,30,30)`, dir combo `(12,h−28,80,20)`
 
 ---
 
-### CelestialThresholdDisplay
+## CelestialThresholdDisplay
 
-The central display replaces a scrolling waveform with a **living geometric star**. This is the visual heart of LIMINAL.
+Six-pointed star (hexagram) in `juce::Graphics`. Scales with engine blend. Axis pairs light in engine colors:
+- HAUNT VERB → ice blue `#a8c4e8`
+- SHIMMER → aged gold `#c9a84c`
+- PITCH GHOST → ghost white `#e8e8f0`
 
-**Structure:**
-- A six-pointed star (hexagram) drawn with gold line work (`#c9a84c`) at center
-- The star has six radiating lines extending outward — think the tarot card's central geometry
-- The overall star **scales up smoothly** as the Liminal Engine blend increases (engines waking in the silence)
-- When blend = 0 (above threshold, dry): star is small, dim, barely visible
-- When blend = 1 (deep silence): star is fully expanded, gold lines bright, radiating glow
+Threshold ring: draggable, radius maps to THRESHOLD param. Envelope ring: animated to live level.
 
-**Per-engine axis pulses:**
-- The six star points are grouped in pairs — one pair per engine
-- HAUNT VERB axes pulse in **ice blue** (`#a8c4e8`) when active
-- SHIMMER axes pulse in **aged gold** (`#c9a84c`) when active
-- PITCH GHOST axes pulse in **ghost white** (`#e8e8f0`) when active
-
-**Threshold ring:**
-- A circular ring sits at a fixed radius from center
-- Ring radius maps to the THRESHOLD parameter value — draggable
-- The envelope level is shown as a second ring that moves inward/outward in real time
-- When the envelope ring crosses inside the threshold ring: engines activate
-
-**Background gradient:**
-- Radial gradient from `#1a2050` (center, slightly lighter cobalt) outward to `#0a0f2e` (edge)
-- Mirrors the luminous-center-to-dark-edge quality of the reference image
-
-**Implementation notes:**
-- Draw using `juce::Graphics::drawLine`, `juce::Path`, and `juce::ColourGradient`
-- Star geometry computed from center point with 6 vertices at equal angular intervals (60° apart)
-- Scale factor driven by `currentBlend` value from LiminalEngine — passed via lock-free atomic
-- Use `juce::AbstractFifo` ring buffer to pass envelope level from audio thread to UI thread (60fps timer)
-- Glow effect: draw star lines twice — once thick+transparent for bloom, once thin+opaque for core
+Glow: star lines drawn twice (thick+transparent bloom, then thin+opaque core).
 
 ---
 
-### Engine Panel Icons
-
-Replace generic dot indicators with celestial glyphs, drawn in `juce::Graphics`:
-
-| Engine | Icon | Color when active |
-|---|---|---|
-| HAUNT VERB | Crescent moon ☽ | Ice blue `#a8c4e8` |
-| SHIMMER | Six-point star ✦ | Aged gold `#c9a84c` |
-| PITCH GHOST | Four-point star ✧ | Ghost white `#e8e8f0` |
-
-Each icon sits below the engine knobs. When the engine is inactive: dim, desaturated. When active: full color with a soft radial glow behind it (drawn as a blurred circle underneath the glyph).
-
----
-
-### LiminalLookAndFeel
+## LiminalLookAndFeel — Color Palette
 
 ```cpp
-class LiminalLookAndFeel : public juce::LookAndFeel_V4 {
-public:
-    LiminalLookAndFeel();
-
-    void drawRotarySlider(juce::Graphics& g, int x, int y, int width, int height,
-                          float sliderPos, float startAngle, float endAngle,
-                          juce::Slider& slider) override;
-
-    void drawToggleButton(juce::Graphics& g, juce::ToggleButton& button,
-                          bool highlighted, bool down) override;
-
-    // ── Color Palette ──────────────────────────────────────────
-    // Inspired by celestial tarot: deep cobalt field, gold geometry,
-    // ice blue and ghost white accents. Functional and clean.
-
-    static constexpr auto COBALT         = juce::Colour(0xff0a0f2e); // background
-    static constexpr auto COBALT_MID     = juce::Colour(0xff1a2050); // center gradient
-    static constexpr auto GOLD           = juce::Colour(0xffc9a84c); // primary accent, star lines
-    static constexpr auto GOLD_DIM       = juce::Colour(0xff6b5a28); // inactive gold
-    static constexpr auto ICE_BLUE       = juce::Colour(0xffa8c4e8); // HAUNT VERB active
-    static constexpr auto GHOST_WHITE    = juce::Colour(0xffe8e8f0); // PITCH GHOST active
-    static constexpr auto PANEL_BORDER   = juce::Colour(0xff2a3060); // subtle engine panel edges
-    static constexpr auto KNOB_TRACK     = juce::Colour(0xff1e2448); // rotary slider track
-    static constexpr auto TEXT_PRIMARY   = juce::Colour(0xffe8e8f0); // labels
-    static constexpr auto TEXT_DIM       = juce::Colour(0xff6070a0); // secondary labels
-
-    // ── Knob Style ─────────────────────────────────────────────
-    // Rotary sliders: dark track ring, gold filled arc, small gold
-    // center dot. No pointer line — arc length communicates value.
-    // Font: clean geometric sans (Inter or similar)
-};
+static constexpr auto COBALT      = juce::Colour(0xff0a0f2e);
+static constexpr auto COBALT_MID  = juce::Colour(0xff1a2050);
+static constexpr auto GOLD        = juce::Colour(0xffc9a84c);
+static constexpr auto GOLD_DIM    = juce::Colour(0xff6b5a28);
+static constexpr auto ICE_BLUE    = juce::Colour(0xffa8c4e8);
+static constexpr auto GHOST_WHITE = juce::Colour(0xffe8e8f0);
+static constexpr auto PANEL_BORDER= juce::Colour(0xff2a3060);
+static constexpr auto KNOB_TRACK  = juce::Colour(0xff1e2448);
+static constexpr auto TEXT_PRIMARY= juce::Colour(0xffe8e8f0);
+static constexpr auto TEXT_DIM    = juce::Colour(0xff6070a0);
 ```
+
+Rotary slider: dark track ring (full 270°), gold filled arc, COBALT center + GOLD dot. No pointer line.
 
 ---
 
-### Typography
+## Presets
 
-- **Plugin title "LIMINAL":** Wide-tracked uppercase, ghost white, top left. Suggest: Inter ExtraLight or similar geometric sans at ~18pt with letter-spacing 0.3em
-- **Engine labels (HAUNT VERB / SHIMMER / PITCH GHOST):** Small caps or uppercase, gold, 10pt
-- **Knob labels:** Ghost white, 9pt, centered below knob
-- **Parameter values (on hover):** Ice blue tooltip, 9pt
+24 factory presets in `PluginProcessor::getProgramName()` / `setCurrentProgram()`. Accessible via DAW program list.
 
 ---
 
-### Knob Design
+## Tests
 
+`tests/LiminalTests.cpp` — 30 tests, all passing.
+
+Build + test:
+```bash
+cmake --build Builds --config Release
+cd Builds && ctest --verbose --output-on-failure
 ```
-Rotary slider appearance:
-- Outer track ring: KNOB_TRACK color, full 270° arc
-- Filled arc: GOLD, from start to current position
-- Center: small filled circle in COBALT with a GOLD dot at center
-- Size: 48px diameter for main knobs, 36px for engine sub-knobs
-- No pointer line — the arc IS the value indicator
-- On hover: arc brightens to full GOLD, value tooltip appears in ICE_BLUE
-```
+
+Coverage: EnvelopeFollower, LiminalEngine blend/depth/invert/tone, HauntVerb tank tail, Shimmer crystallize freeze, PitchGhost choir, RampSystem, integration (atmosphere appears after sound stops).
 
 ---
 
-### Ramp Bar (bottom strip)
-
-```
-[RAMP A label] ─────────●──────── [RAMP B label]   [TIME knob]  [LATCH toggle]
-
-- Horizontal slider for morph position between state A and state B
-- Track: PANEL_BORDER color
-- Thumb: gold circle with subtle glow
-- LATCH toggle: small rectangular button, lights gold when engaged
-- RAMP A / B labels: dim gold, clicking each stores current parameter state
-```
-
----
-
-## Pamplejuce CMake Configuration
-
-In `CMakeLists.txt`, update the following sections after cloning Pamplejuce:
+## CMake Config
 
 ```cmake
-set(PLUGIN_NAME "LIMINAL")
-set(PLUGIN_VERSION "0.1.0")
-set(PLUGIN_MANUFACTURER "Ament Audio")
-set(PLUGIN_MANUFACTURER_CODE "AmAu")
-set(PLUGIN_CODE "Lmnl")
-set(PLUGIN_FORMATS VST3 AU Standalone)
-
-# DSP sources
-target_sources(${PLUGIN_NAME} PRIVATE
-    source/PluginProcessor.cpp
-    source/PluginEditor.cpp
-    source/dsp/EnvelopeFollower.cpp
-    source/dsp/LiminalEngine.cpp
-    source/dsp/HauntVerb.cpp
-    source/dsp/Shimmer.cpp
-    source/dsp/PitchGhost.cpp
-    source/modulation/RampSystem.cpp
-    source/modulation/ModMatrix.cpp
-    source/ui/LiminalLookAndFeel.cpp
-    source/ui/ThresholdDisplay.cpp
-    source/ui/EnginePanel.cpp
-    source/ui/KnobComponent.cpp
-)
-
-# JUCE modules needed
-target_link_libraries(${PLUGIN_NAME} PRIVATE
-    juce::juce_audio_processors
-    juce::juce_audio_utils
-    juce::juce_dsp
-    juce::juce_gui_basics
-    juce::juce_graphics
-)
+set(PROJECT_NAME "LIMINAL")
+set(PRODUCT_NAME "LIMINAL")
+set(COMPANY_NAME "Ament Audio")
+set(BUNDLE_ID "com.amentagudio.liminal")
+set(FORMATS Standalone AU VST3)   # CLAP via clap-juce-extensions
 ```
 
----
+JUCE modules: `juce_audio_processors`, `juce_audio_utils`, `juce_dsp`, `juce_gui_basics`, `juce_graphics`
+JUCE DSP in use: `DelayLine`, `StateVariableTPTFilter`, `Oscillator` (LFO), `ProcessSpec`, `SmoothedValue`, `AbstractFifo`
 
-## JUCE DSP Modules in Use
-
-| Module | Used For |
-|---|---|
-| `juce::dsp::DelayLine` | HauntVerb diffusion lines |
-| `juce::dsp::StateVariableTPTFilter` | HauntVerb high-pass sweep |
-| `juce::dsp::Oscillator` | LFO in ModMatrix |
-| `juce::dsp::ProcessSpec` | prepare() throughout |
-| `juce::AudioProcessorValueTreeState` | All parameters + undo/DAW automation |
-| `juce::dsp::Gain` | Wet/dry mix stages |
+Note: `NEEDS_MIDI_INPUT` must be set for MIDI note-on → ghost capture in AU/VST3.
 
 ---
 
 ## Coding Conventions
 
-- All DSP classes implement `prepare(const juce::dsp::ProcessSpec&)` before use
-- `processBlock` must be real-time safe: no allocations, no locks, no exceptions
-- All heap allocations happen in `prepareToPlay` / `prepare()`
-- Use `juce::ScopedNoDenormals` at the top of `processBlock`
-- Parameter smoothing: use `juce::SmoothedValue<float>` for all APVTS reads in the audio thread
-- Thread safety: APVTS handles message/audio thread boundary — do not share raw pointers across threads
+- All DSP classes: `prepare(const juce::dsp::ProcessSpec&)` before use
+- `processBlock` real-time safe: no allocations, no locks, no exceptions
+- `SmoothedValue::skip(numSamples)` — not `getNextValue()` once per block
+- APVTS handles message/audio thread boundary — no raw pointer sharing
+- UI ↔ audio: lock-free `AbstractFifo` ring buffer for envelope data
 
 ---
 
-## Implementation Priority Order
+## Release Status
 
-1. `EnvelopeFollower` — foundation everything depends on
-2. `LiminalEngine` skeleton — threshold detection + blend logic
-3. `HauntVerb` — most conventional DSP, good starting point
-4. `PluginProcessor` + `PluginEditor` scaffolding — get audio flowing
-5. `Shimmer` — pitch shifting is complex, build on stable core
-6. `PitchGhost` — most novel, save for stable base
-7. `RampSystem` + `ModMatrix` — modulation layer last
-8. Full UI polish — `ThresholdDisplay`, `LiminalLookAndFeel`
+**Done:** All DSP engines, full APVTS model, ModMatrix, RampSystem, sidechain, invert mode, 24 presets, artwork UI, star animation, 30 passing tests.
 
----
+**Blockers for signed public release:**
+1. macOS code signing — needs `DEV_ID_APP_CERT` GitHub secret (Apple Developer)
+2. macOS notarization — needs Apple notarization credentials
+3. Windows code signing — needs Azure Trusted Signing secrets
+4. Pluginval strictness-10 verified CI pass
 
-## Known Complexity Areas
-
-- **PitchGhost capture trigger:** Needs careful zero-crossing detection to avoid clicks when capturing the snapshot buffer. Use a short fade-in on capture playback.
-- **Shimmer pitch shifter:** Recommend a phase vocoder approach (matching FREECODER's DNA). Can stub with `juce::dsp::ProcessorChain` pitch shift as placeholder.
-- **ThresholdDisplay threading:** Waveform display reads envelope data from audio thread. Use a lock-free ring buffer (`juce::AbstractFifo`) to pass data to the UI thread safely.
-- **Slew rate at sample rate changes:** Recompute slew coefficients in `prepareToPlay`.
+**Nice-to-have:** output auto-gain, HauntVerb SIZE control, in-plugin preset browser, CPU profiling pass.
 
 ---
 
-## Testing
-
-```cpp
-// tests/LiminalTests.cpp
-
-// 1. EnvelopeFollower: feed silence → expect 0.0 output
-// 2. EnvelopeFollower: feed 1.0 sine → expect envelope converges to ~1.0
-// 3. LiminalEngine: above threshold → expect blend = 0.0
-// 4. LiminalEngine: below threshold → expect blend > 0.0
-// 5. HauntVerb: silence in → silence out (no self-oscillation at default settings)
-// 6. Shimmer: crystallize=0 → output decays; crystallize=1 → output holds
-// 7. RampSystem: trigger → position advances from 0.0 to 1.0 over rampTime
-// 8. No denormals in processBlock under silence
-```
-
----
-
-*LIMINAL — Ament Audio — Claude.md v1.1 — UI updated to celestial geometry hybrid direction*
+*LIMINAL — Ament Audio — Claude.md v2.0 — 2026-07-02*
