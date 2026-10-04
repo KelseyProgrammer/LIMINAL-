@@ -21,6 +21,58 @@ LIMINAL ships with **24 factory presets** accessible via the DAW's program list.
 
 ---
 
+## Signal Flow
+
+The audio path and the control path are fully separate. The control path never touches audio — it only computes a single *blend* value that scales how hard the wet engines render. The three engines run as parallel wet-only buses; the dry signal passes through untouched and is summed back in at the end.
+
+```mermaid
+flowchart LR
+    IN([Audio In]) --> EF
+    SC([Sidechain In]) -. "optional envelope source" .-> EF
+
+    subgraph CTRL["Control path"]
+        EF["Envelope Follower<br/>one-pole IIR, mono max-abs"]
+        BL{{"Blend logic<br/>THRESHOLD · DEPTH · INVERT"}}
+        EF -- "envelope level (0–1)" --> BL
+    end
+
+    BL -. "blend, smoothed by SLEW" .-> HV & SH & PG
+
+    IN --> DRY["Dry path"]
+    IN --> HV
+    IN --> SH
+    IN --> PG
+
+    subgraph WET["Wet engines — parallel wet-only buses"]
+        HV["HAUNT VERB<br/>4× allpass diffusion → cross-coupled tank"]
+        SH["SHIMMER<br/>OLA pitch cascade → damped feedback delay"]
+        PG["PITCH GHOST<br/>3-voice snapshot choir"]
+        SH -- "× 0.85" --> HV
+    end
+
+    HV --> SUM(("Σ"))
+    SH --> SUM
+    PG --> SUM
+    SUM -- "× MIX" --> ADD(("+"))
+    DRY --> ADD
+    ADD --> TONE["TONE<br/>one-pole LP / HP, bypassed at 0"]
+    TONE --> OUT([Audio Out])
+
+    classDef haunt fill:#a8c4e8,stroke:#0a0f2e,color:#0a0f2e
+    classDef shimmer fill:#c9a84c,stroke:#0a0f2e,color:#0a0f2e
+    classDef ghost fill:#e8e8f0,stroke:#0a0f2e,color:#0a0f2e
+    class HV haunt
+    class SH shimmer
+    class PG ghost
+```
+
+Two details worth noting:
+
+- **SHIMMER feeds HAUNT VERB.** 85% of the shimmer output is routed into the reverb's input, so pitch-shifted material inherits the tank's tail — this is what makes the shimmer *bloom* rather than sit on top of the reverb.
+- **The blend edges are dashed** because they carry control data, not audio. Blend is recomputed per block from the envelope level, then slewed by a one-pole smoother (the SLEW knob) so engines fade in rather than gate on.
+
+---
+
 ## Engines
 
 ### HAUNT VERB
